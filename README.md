@@ -30,8 +30,19 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-The image builds natively on the target (tested on a Pine64, aarch64, Debian 12) and
-also on x86-64. It runs D-Bus, Avahi, NQPTP and the bridge in one container with
+The image builds on the target itself (amd64 or arm64), or on a faster machine for
+another architecture. All build steps run on the build machine: the programs are
+cross-compiled with Debian's cross toolchain, and the target's runtime packages are
+unpacked onto the official target base image. No QEMU emulation is needed:
+
+```sh
+docker buildx build --platform linux/arm64 -t airplay2cast:latest --load .
+docker save airplay2cast:latest | ssh pine64 docker load   # then on the target:
+docker compose up -d --no-build
+```
+
+Native builds run the unit tests during the build. Cross builds export
+`tests/test_unit` with the binaries (below), to be run on the target. It runs D-Bus, Avahi, NQPTP and the bridge in one container with
 host networking (required for mDNS, PTP and the streaming ports). UDP 319/320 must be
 free: stop any other NQPTP / AirPlay 2 receiver (e.g. AirConnect, shairport-sync)
 first.
@@ -72,8 +83,9 @@ helper container can supply the root-only services. Avahi and D-Bus are shared
 through `./run/dbus`; NQPTP's clock is shared through host IPC.
 
 ```sh
-docker build --target binaries --output type=local,dest=out .   # out/shairport-sync, out/nqptp, out/lib
-make
+docker buildx build --platform linux/arm64 --target binaries --output type=local,dest=out .
+# out/: airplay2cast, shairport-sync, nqptp, lib/ (avahi client), tests/test_unit
+out/tests/test_unit                          # unit tests, on the target
 scripts/run-native.sh -i "Hallway speaker"   # starts the support-services container, then the native binaries
 ```
 
@@ -147,9 +159,11 @@ latency (measured).
 
 ### Validation record (Pine64, aarch64, Armbian 24.11 / Debian 12)
 
+Binaries and image cross-built on x86-64 (no emulation), tested on the Pine64.
+
 | check | native binary | Docker |
 |---|---|---|
-| build with `-Werror`, unit tests under ASan/UBSan | pass | pass (in image build) |
+| build with `-Werror`, unit tests under ASan/UBSan | pass (cross-built `test_unit` on Pine64) | pass (amd64 native image build) |
 | discovery of all 6 Cast devices / groups | pass | pass |
 | AirPlay 2 advertisements (`_airplay._tcp` + `_raop._tcp`, features, pk) | pass | pass (6 receivers) |
 | RTSP `GET /info` binary plist | | pass |
@@ -159,7 +173,7 @@ latency (measured).
 | no `libssl`/`libcrypto` loaded by bridge, shairport-sync, nqptp (`ldd`) | pass | pass |
 | tone through Cast: steady PLAYING, ~1.4 s latency, volume restored | pass (x86 + Pine64) | pass |
 | integration test (fake shairport-sync, real Nest Audio) | pass | |
-| idle footprint, 6 receivers | | 38 MiB RAM, ~2% CPU |
+| idle footprint, 6 receivers; restart time | | 31 MiB RAM, ~2–4% CPU; 1.5 s |
 
 **Not covered by automated tests:**
 

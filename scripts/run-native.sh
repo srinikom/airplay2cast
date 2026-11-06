@@ -5,8 +5,9 @@
 # The root-only pieces (D-Bus + Avahi for AirPlay advertising, NQPTP on UDP 319/320)
 # come from the "support-services" container, shared via ./run/dbus and host IPC.
 #
-#   docker build --target binaries --output type=local,dest=out .   # shairport-sync, nqptp
-#   make                                                            # airplay2cast
+#   docker build --target binaries --output type=local,dest=out .   # all programs
+#     (for another architecture: docker buildx build --platform linux/arm64 ...)
+#   make                                    # optional: a local ./airplay2cast is preferred
 #   scripts/run-native.sh [airplay2cast options]      # also starts support-services
 set -eu
 cd "$(dirname "$0")/.."
@@ -20,4 +21,6 @@ if [ ! -S run/dbus/system_bus_socket ]; then
 fi
 export DBUS_SYSTEM_BUS_ADDRESS="unix:path=$PWD/run/dbus/system_bus_socket"
 export LD_LIBRARY_PATH="$PWD/out/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec ./airplay2cast --shairport "$PWD/out/shairport-sync" --state-dir "$PWD/run/state" "$@"
+bridge=./airplay2cast
+[ -x "$bridge" ] || bridge=out/airplay2cast
+exec "$bridge" --shairport "$PWD/out/shairport-sync" --state-dir "$PWD/run/state" "$@"
