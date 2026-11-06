@@ -1,7 +1,7 @@
 third_party
 out
 run
-*.o
+**/*.o
 /airplay2cast
 tests/test_unit
 *.log
