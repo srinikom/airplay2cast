@@ -1,0 +1,38 @@
+services:
+  airplay2cast:
+    build: .
+    image: airplay2cast:latest
+    container_name: airplay2cast
+    # mDNS (discovery + advertising), PTP (UDP 319/320), AirPlay and Cast all need the LAN
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    environment:
+      # comma-separated Cast device names or ids; empty = all
+      AP2C_INCLUDE: ${AP2C_INCLUDE:-}
+      AP2C_EXCLUDE: ${AP2C_EXCLUDE:-}
+    # extra airplay2cast options, for example:
+    # command: ["--suffix", " (AirPlay)", "--no-groups", "--idle-timeout", "60"]
+    tmpfs:
+      - /tmp
+    volumes:
+      - /etc/localtime:/etc/localtime:ro # log timestamps in host local time
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  # Support services only (D-Bus, Avahi, NQPTP) for running the natively built
+  # binaries on the host without root (see scripts/run-native.sh):
+  #   docker compose --profile native up -d support-services
+  support-services:
+    profiles: ["native"]
+    image: airplay2cast:latest
+    container_name: airplay2cast-services
+    network_mode: host
+    ipc: host # NQPTP clock shared memory must be visible to host processes
+    init: true
+    environment:
+      AP2C_MODE: services
+    volumes:
+      - ./run/dbus:/run/dbus # host processes reach this Avahi through the bus socket
