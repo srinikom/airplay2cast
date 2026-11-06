@@ -171,5 +171,9 @@ latency (measured).
 * Avahi warns about another mDNS stack when systemd-resolved has mDNS enabled; this
   works but can be avoided with `MulticastDNS=no` in `resolved.conf`.
 
-shairport-sync and nqptp are fetched at pinned commits and used unmodified, under their
-own licenses (nqptp is GPLv2).
+## License
+
+airplay2cast is MIT licensed (`LICENSE`). shairport-sync and nqptp are fetched at
+pinned commits and used unmodified as separate programs, under their
+own licenses (nqptp is GPL-2.0). The Docker image ships their license texts and
+source; see `THIRD_PARTY_NOTICES.md`.

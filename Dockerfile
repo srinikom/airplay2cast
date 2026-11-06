@@ -29,6 +29,18 @@ RUN git clone https://github.com/mikebrady/shairport-sync.git && cd shairport-sy
 RUN mkdir -p /out/lib && cp nqptp/nqptp shairport-sync/shairport-sync /out/ \
     && strip /out/nqptp /out/shairport-sync \
     && cp -L /usr/lib/*/libavahi-client.so.3 /usr/lib/*/libavahi-common.so.3 /out/lib/
+# license texts and the complete corresponding source of the shipped binaries
+# (nqptp is GPL-2.0; see THIRD_PARTY_NOTICES.md)
+RUN d=/out/share/doc/airplay2cast && s=/out/share/src/airplay2cast && mkdir -p $d $s \
+    && cp nqptp/LICENSE $d/LICENSE.nqptp \
+    && cp shairport-sync/LICENSES $d/LICENSES.shairport-sync \
+    && cp /usr/share/doc/libavahi-client3/copyright $d/copyright.avahi \
+    && git -C nqptp archive --format=tar.gz --prefix=nqptp-${NQPTP_REV}/ \
+         -o $s/nqptp-${NQPTP_REV}.tar.gz HEAD \
+    && git -C shairport-sync archive --format=tar.gz --prefix=shairport-sync-${SPS_REV}/ \
+         -o $s/shairport-sync-${SPS_REV}.tar.gz HEAD
+COPY LICENSE /out/share/doc/airplay2cast/LICENSE
+COPY THIRD_PARTY_NOTICES.md /out/share/doc/airplay2cast/
 
 FROM debian:${DEBIAN} AS bridge
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential libssl-dev \
@@ -51,6 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i 's/^#\?enable-dbus=.*/enable-dbus=yes/; s/^#\?publish-workstation=.*/publish-workstation=no/' /etc/avahi/avahi-daemon.conf
 COPY --from=deps /out/nqptp /out/shairport-sync /usr/local/bin/
+COPY --from=deps /out/share/ /usr/share/
 COPY --from=bridge /src/airplay2cast /usr/local/bin/
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
