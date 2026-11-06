@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only
+ * Copyright (C) 2026 Srini K */
+
 #ifndef AP2C_CAST_H
 #define AP2C_CAST_H
 
@@ -8,11 +11,11 @@
 
 #define CAST_APP_DEFAULT_MEDIA_RECEIVER "CC1AD845"
 
-typedef struct ssl_st SSL;
+struct gnutls_session_int; /* gnutls_session_t */
 
 typedef struct cast_conn {
   int fd;
-  SSL *ssl;
+  struct gnutls_session_int *tls;
   char tag[96];  /* log prefix */
   char host[64];
   int port;
@@ -51,7 +54,7 @@ void cast_global_init(void);
 /* Connects (TLS) and opens the platform virtual connection. Returns 0 on success. */
 int cast_open(cast_conn *c, const char *tag, const char *host, int port, int timeout_ms);
 void cast_close(cast_conn *c);
-static inline int cast_is_open(const cast_conn *c) { return c->ssl != 0; }
+static inline int cast_is_open(const cast_conn *c) { return c->tls != 0; }
 int cast_fd(const cast_conn *c);
 
 /* Reads and processes incoming messages for up to timeout_ms, sends heartbeats.

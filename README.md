@@ -13,11 +13,13 @@ name; picking it plays the audio on that speaker.
 * **airplay2cast** (this repository, C): discovers Cast devices over mDNS, runs one
   AirPlay 2 receiver per device, buffers its PCM, serves it as an endless HTTP WAV
   stream, and controls the speaker with the Cast v2 protocol (Default Media Receiver).
-  Its own dependency is OpenSSL; the mDNS browser, Cast protobuf framing,
-  JSON parser, HTTP server and process supervision are built in.
-* **shairport-sync 5.6.2** (pinned, unmodified) is the AirPlay 2 receiver: HomeKit
-  pairing, encryption, decoding, and timing. One instance per speaker, each with its own
-  AirPlay device ID, port and NQPTP clock.
+  Its only library dependency is GnuTLS (for the Cast TLS connection); the mDNS
+  browser, Cast protobuf framing, JSON parser, HTTP server and process supervision are
+  built in.
+* **shairport-sync 5.6.2** (pinned) is the AirPlay 2 receiver: HomeKit pairing,
+  encryption, decoding, and timing. One instance per speaker, each with its own
+  AirPlay device ID, port and NQPTP clock. `patches/shairport-sync-libgcrypt.patch`
+  adds a `--with-ssl=gcrypt` option, so it uses libgcrypt instead of OpenSSL.
 * **nqptp** (pinned, unmodified) provides the PTP clock AirPlay 2 requires (UDP 319/320).
 * **Avahi** advertises the AirPlay 2 services (shairport-sync needs it for AirPlay 2).
 
@@ -45,7 +47,7 @@ AP2C_INCLUDE="Hallway speaker,Office speaker" docker compose up -d
 
 ## Native binary
 
-Build and run tests (needs `gcc`, `make`, `libssl-dev`):
+Build and run tests (needs `gcc`, `make`, `libgnutls28-dev`):
 
 ```sh
 make && make test
@@ -54,8 +56,11 @@ make && make test
 ```
 
 The bridge needs a `shairport-sync` built with AirPlay 2, the stdout backend, and
-metadata. Its configure flags are
-`--with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr --with-stdout --with-metadata --with-metadata-multicast`.
+metadata. The Docker build applies `patches/shairport-sync-libgcrypt.patch` and
+configures with
+`--with-airplay-2 --with-avahi --with-ssl=gcrypt --with-soxr --with-stdout --with-metadata --with-metadata-multicast`.
+An unpatched shairport-sync built with `--with-ssl=openssl` also works with the
+bridge, but OpenSSL's Apache-2.0 license can't be combined with GPL-2.0 code.
 It also needs a running `nqptp` and `avahi-daemon`. With those installed:
 
 ```sh
@@ -73,7 +78,7 @@ scripts/run-native.sh -i "Hallway speaker"   # starts the support-services conta
 ```
 
 `out/shairport-sync` is built against Debian 12 libraries. The host needs these
-runtime packages: `libpopt0 libconfig9 libssl3 libsoxr0 libplist3 libsodium23
+runtime packages: `libpopt0 libconfig9 libgnutls30 libsoxr0 libplist3 libsodium23
 libgcrypt20 libuuid1 libavutil57 libavcodec59 libavformat59 libswresample4`.
 The avahi client libraries ship in `out/lib`.
 
@@ -149,6 +154,9 @@ latency (measured).
 | AirPlay 2 advertisements (`_airplay._tcp` + `_raop._tcp`, features, pk) | pass | pass (6 receivers) |
 | RTSP `GET /info` binary plist | | pass |
 | AirPlay 2 pair-setup/verify from pyatv up to SETUP | pass | pass |
+| libgcrypt crypto (RSA sign/OAEP, AES-CBC, MD5, base64) identical to OpenSSL | pass (x86 test harness) | |
+| live `Apple-Challenge` → `Apple-Response` RSA signature verifies | | pass |
+| no `libssl`/`libcrypto` loaded by bridge, shairport-sync, nqptp (`ldd`) | pass | pass |
 | tone through Cast: steady PLAYING, ~1.4 s latency, volume restored | pass (x86 + Pine64) | pass |
 | integration test (fake shairport-sync, real Nest Audio) | pass | |
 | idle footprint, 6 receivers | | 38 MiB RAM, ~2% CPU |
@@ -173,7 +181,9 @@ latency (measured).
 
 ## License
 
-airplay2cast is MIT licensed (`LICENSE`). shairport-sync and nqptp are fetched at
-pinned commits and used unmodified as separate programs, under their
-own licenses (nqptp is GPL-2.0). The Docker image ships their license texts and
-source; see `THIRD_PARTY_NOTICES.md`.
+airplay2cast is licensed under the GNU General Public License, version 2 only
+(`GPL-2.0-only`, see `LICENSE`). shairport-sync (MIT, plus the MIT-licensed libgcrypt
+patch in `patches/`) and nqptp (GPL-2.0-only) are fetched at pinned commits and run as
+separate programs under their own licenses. Nothing in the bridge or shairport-sync
+uses OpenSSL. The Docker image ships the license texts and complete source; see
+`THIRD_PARTY_NOTICES.md`.

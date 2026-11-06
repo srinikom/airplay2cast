@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Srini K
 # Container entrypoint: D-Bus + Avahi (unless the host's are mounted in), NQPTP, then
 # the airplay2cast bridge. AP2C_MODE=services starts only the support services; it is
 # used to test the natively built bridge on a host without root access.

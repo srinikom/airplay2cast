@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Srini K
 # Bridge integration test against a real Cast device, without an AirPlay sender:
 # tests/fake_sps.py replaces shairport-sync and scripts play / flush / resume / end.
 #   tests/integration.sh "Hallway speaker" [path/to/airplay2cast]

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Srini K
 # Runs the natively built airplay2cast + shairport-sync on the host, without root.
 # The root-only pieces (D-Bus + Avahi for AirPlay advertising, NQPTP on UDP 319/320)
 # come from the "support-services" container, shared via ./run/dbus and host IPC.

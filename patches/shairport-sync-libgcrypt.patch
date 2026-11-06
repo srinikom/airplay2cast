@@ -1,0 +1,464 @@
+shairport-sync: add a libgcrypt crypto backend (--with-ssl=gcrypt)
+
+Lets shairport-sync build without OpenSSL or Mbed TLS. libgcrypt already
+provides the AirPlay 2 pairing crypto (pair_ap); this adds the rest:
+  - common.c: base64, and RSA from the built-in PKCS#1 key (PKCS#1 v1.5 raw
+    signature for Apple-Challenge, RSA-OAEP/SHA-1 key decryption)
+  - player.c: AES-128-CBC decryption of classic AirPlay audio
+  - rtsp.c, shairport.c, metadata/hub.c: MD5 (digest auth, device UUID,
+    cover-art file names)
+Applies to shairport-sync 0a34fbda83724cc06266aadcf7c88acc8fef4e7d (5.6.2).
+
+Copyright (C) 2026 Srini K
+License: MIT, the same terms as shairport-sync, so it can be offered upstream.
+
+diff --git a/common.c b/common.c
+index cdf66b9..ef9a824 100644
+--- a/common.c
++++ b/common.c
+@@ -83,6 +83,10 @@
+ #include <openssl/rsa.h> // needed for EVP_PKEY_CTX_set_rsa_padding
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++#include <gcrypt.h>
++#endif
++
+ #ifdef CONFIG_POLARSSL
+ #include "polarssl/ctr_drbg.h"
+ #include "polarssl/entropy.h"
+@@ -780,6 +784,57 @@ uint8_t *base64_dec(char *input, int *outlen) {
+ }
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++static int base64_value(char c) {
++  if (c >= 'A' && c <= 'Z')
++    return c - 'A';
++  if (c >= 'a' && c <= 'z')
++    return c - 'a' + 26;
++  if (c >= '0' && c <= '9')
++    return c - '0' + 52;
++  if (c == '+')
++    return 62;
++  if (c == '/')
++    return 63;
++  return -1;
++}
++
++// returns a NUL-terminated encoding without line breaks
++char *base64_enc(uint8_t *input, int length) {
++  size_t olen = 4 * (((size_t)length + 2) / 3);
++  char *buf = malloc(olen + 1);
++  if (buf == NULL)
++    die("could not allocate memory for buf in base64_enc");
++  if (base64_encode_so(input, length, buf, &olen) == NULL)
++    olen = 0;
++  buf[olen] = 0;
++  return buf;
++}
++
++// accepts input with or without padding (Apple omits it) and ignores whitespace
++uint8_t *base64_dec(char *input, int *outlen) {
++  size_t inlen = strlen(input);
++  uint8_t *buf = malloc(inlen * 3 / 4 + 3);
++  if (buf == NULL)
++    die("could not allocate memory for buf in base64_dec");
++  uint32_t acc = 0;
++  int bits = 0, n = 0;
++  for (size_t i = 0; i < inlen && input[i] != '='; i++) {
++    int v = base64_value(input[i]);
++    if (v < 0)
++      continue;
++    acc = (acc << 6) | (uint32_t)v;
++    bits += 6;
++    if (bits >= 8) {
++      bits -= 8;
++      buf[n++] = (uint8_t)(acc >> bits);
++    }
++  }
++  *outlen = n;
++  return buf;
++}
++#endif
++
+ static char super_secret_key[] =
+     "-----BEGIN RSA PRIVATE KEY-----\n"
+     "MIIEpQIBAAKCAQEA59dE8qLieItsH1WgjrcFRKj6eUWqi+bGLOX1HL3U3GhC/j0Qg90u3sG/1CUt\n"
+@@ -890,6 +945,135 @@ uint8_t *rsa_apply(uint8_t *input, int inlen, int *outlen, int mode) {
+ }
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++// reads one DER element with the given tag; returns 0 and advances *p on success
++static int der_element(const uint8_t **p, const uint8_t *end, uint8_t tag, const uint8_t **val,
++                       size_t *len) {
++  const uint8_t *q = *p;
++  if (end - q < 2 || *q++ != tag)
++    return -1;
++  size_t l = *q++;
++  if (l & 0x80) {
++    int nb = l & 0x7f;
++    if (nb < 1 || nb > 4 || end - q < nb)
++      return -1;
++    for (l = 0; nb--;)
++      l = (l << 8) | *q++;
++  }
++  if ((size_t)(end - q) < l)
++    return -1;
++  *val = q;
++  *len = l;
++  *p = q + l;
++  return 0;
++}
++
++// builds a libgcrypt private key from the PEM-encoded PKCS#1 RSAPrivateKey above
++static gcry_sexp_t rsa_private_key(void) {
++  const char *b = strstr(super_secret_key, "-----\n");
++  const char *e = strstr(super_secret_key, "\n-----END");
++  if (b == NULL || e == NULL || e <= b)
++    return NULL;
++  char *pem = strndup(b + 6, e - (b + 6));
++  int derlen = 0;
++  uint8_t *der = base64_dec(pem, &derlen);
++  free(pem);
++
++  gcry_sexp_t key = NULL;
++  gcry_mpi_t m[9] = {NULL}; // version, n, e, d, p, q, dp, dq, qinv
++  const uint8_t *p = der, *end = der + derlen, *val;
++  size_t len;
++  int i, ok = der_element(&p, end, 0x30, &val, &len) == 0;
++  if (ok) {
++    p = val;
++    end = val + len;
++  }
++  for (i = 0; ok && i < 9; i++)
++    ok = der_element(&p, end, 0x02, &val, &len) == 0 &&
++         gcry_mpi_scan(&m[i], GCRYMPI_FMT_USG, val, len, NULL) == 0;
++  if (ok) {
++    // libgcrypt requires p < q and u = p^-1 mod q
++    gcry_mpi_t kp = m[4], kq = m[5];
++    if (gcry_mpi_cmp(kp, kq) > 0) {
++      kp = m[5];
++      kq = m[4];
++    }
++    gcry_mpi_t u = gcry_mpi_new(0);
++    gcry_mpi_invm(u, kp, kq);
++    if (gcry_sexp_build(&key, NULL, "(private-key(rsa(n%m)(e%m)(d%m)(p%m)(q%m)(u%m)))", m[1],
++                        m[2], m[3], kp, kq, u) != 0)
++      key = NULL;
++    gcry_mpi_release(u);
++  } else {
++    debug(1, "can not parse the RSA private key");
++  }
++  for (i = 0; i < 9; i++)
++    gcry_mpi_release(m[i]);
++  free(der);
++  return key;
++}
++
++uint8_t *rsa_apply(uint8_t *input, int inlen, int *outlen, int mode) {
++  uint8_t *out = NULL;
++  *outlen = 0;
++  gcry_sexp_t key = rsa_private_key();
++  if (key == NULL)
++    return NULL;
++  size_t keylen = (gcry_pk_get_nbits(key) + 7) / 8;
++  gcry_sexp_t data = NULL, result = NULL, token = NULL;
++  gcry_error_t rc;
++
++  switch (mode) {
++  case RSA_MODE_AUTH: // a PKCS#1 v1.5 signature of the raw input, without a DigestInfo
++    rc = gcry_sexp_build(&data, NULL, "(data(flags pkcs1-raw)(value %b))", inlen, input);
++    if (rc == 0)
++      rc = gcry_pk_sign(&result, data, key);
++    if (rc == 0 && (token = gcry_sexp_find_token(result, "s", 0)) != NULL) {
++      gcry_mpi_t s = gcry_sexp_nth_mpi(token, 1, GCRYMPI_FMT_USG);
++      size_t slen = 0;
++      out = calloc(1, keylen);
++      // left-pad the signature to the key length
++      if (s != NULL && out != NULL &&
++          gcry_mpi_print(GCRYMPI_FMT_USG, NULL, 0, &slen, s) == 0 && slen <= keylen &&
++          gcry_mpi_print(GCRYMPI_FMT_USG, out + keylen - slen, slen, NULL, s) == 0)
++        *outlen = keylen;
++      gcry_mpi_release(s);
++    }
++    if (rc != 0)
++      debug(1, "RSA sign error: %s", gcry_strerror(rc));
++    break;
++  case RSA_MODE_KEY:
++    rc = gcry_sexp_build(&data, NULL, "(enc-val(flags oaep)(hash-algo sha1)(rsa(a %b)))", inlen,
++                         input);
++    if (rc == 0)
++      rc = gcry_pk_decrypt(&result, data, key);
++    if (rc == 0 && (token = gcry_sexp_find_token(result, "value", 0)) != NULL) {
++      size_t vlen = 0;
++      const char *v = gcry_sexp_nth_data(token, 1, &vlen);
++      if (v != NULL && (out = malloc(vlen ? vlen : 1)) != NULL) {
++        memcpy(out, v, vlen);
++        *outlen = vlen;
++      }
++    }
++    if (rc != 0)
++      debug(1, "RSA decrypt error: %s", gcry_strerror(rc));
++    break;
++  default:
++    debug(1, "Unknown mode");
++    break;
++  }
++  if (*outlen == 0) {
++    free(out);
++    out = NULL;
++  }
++  gcry_sexp_release(token);
++  gcry_sexp_release(result);
++  gcry_sexp_release(data);
++  gcry_sexp_release(key);
++  return out;
++}
++#endif
++
+ #ifdef CONFIG_MBEDTLS
+ #if MBEDTLS_VERSION_MAJOR >= 4
+ // Mbed TLS 4 only provides RSA through PSA, which needs psa_crypto_init() to have been called
+@@ -1982,6 +2166,9 @@ char *get_version_string() {
+ #ifdef CONFIG_OPENSSL
+     strcat(version_string, "-OpenSSL");
+ #endif
++#ifdef CONFIG_LIBGCRYPT
++    strcat(version_string, "-libgcrypt");
++#endif
+ #ifdef CONFIG_TINYSVCMDNS
+     strcat(version_string, "-tinysvcmdns");
+ #endif
+diff --git a/configure.ac b/configure.ac
+index 81db6e0..3a24b60 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -168,7 +168,7 @@ fi
+ AM_CONDITIONAL([USE_LIBDAEMON], [test "x$with_libdaemon" = "xyes"])
+ 
+ # Check --with-ssl=argument
+-AC_ARG_WITH(ssl, [AS_HELP_STRING([--with-ssl=<argument>],[choose --with-ssl=openssl, --with-ssl=mbedtls or --with-ssl=polarssl (deprecated) for encryption services  ])])
++AC_ARG_WITH(ssl, [AS_HELP_STRING([--with-ssl=<argument>],[choose --with-ssl=openssl, --with-ssl=mbedtls, --with-ssl=gcrypt or --with-ssl=polarssl (deprecated) for encryption services  ])])
+ 
+ if test "x${with_ssl}" = xopenssl ; then
+ 	AC_DEFINE([CONFIG_OPENSSL], 1, [Use the OpenSSL libraries for encryption and encoding and decoding])
+@@ -189,11 +189,17 @@ elif test "x${with_ssl}" = xmbedtls ; then
+ 	            [AC_MSG_ERROR([mbed tls support requires the mbedcrypto library (tfpsacrypto with Mbed TLS 4) -- libmbedcrypto0 suggested],1)])
+ 	AC_CHECK_LIB([mbedx509], [mbedtls_pk_init],,
+ 	            [AC_MSG_ERROR([mbed tls support requires the mbedx509 library -- libmbedx509-0 suggested],1)])
++elif test "x${with_ssl}" = xgcrypt ; then
++	AC_DEFINE([CONFIG_LIBGCRYPT], 1, [Use libgcrypt for encryption, hashing and RSA])
++	PKG_CHECK_MODULES(
++	    [GCRYPT_SSL], [libgcrypt],
++	    [CFLAGS="${GCRYPT_SSL_CFLAGS} ${CFLAGS}" LIBS="${GCRYPT_SSL_LIBS} ${LIBS}"],
++	    [AC_CHECK_LIB([gcrypt], [gcry_control], , AC_MSG_ERROR(libgcrypt selected but the library cannot be found -- libgcrypt20-dev suggested))])
+ elif test "x${with_ssl}" = xpolarssl ; then
+ 	AC_DEFINE([CONFIG_POLARSSL], 1, [Use the PolarSSL libraries for encryption and encoding and decoding])
+ 	AC_CHECK_LIB([polarssl],[ssl_init], , AC_MSG_ERROR(PolarSSL is selected but the library libpolarssl-dev does not seem to be installed and is deprecated. Consider selecting mbedtls instead using --with-ssl=mbedtls.))
+ else
+-	AC_MSG_ERROR(specify one of --with-ssl=openssl or --with-ssl=mbedtls or --with-ssl=polarssl)
++	AC_MSG_ERROR(specify one of --with-ssl=openssl or --with-ssl=mbedtls or --with-ssl=gcrypt or --with-ssl=polarssl)
+ fi
+ 
+ # Look for soxr flag
+diff --git a/metadata/hub.c b/metadata/hub.c
+index 44c85c5..441d582 100644
+--- a/metadata/hub.c
++++ b/metadata/hub.c
+@@ -65,6 +65,10 @@
+ #include <openssl/evp.h>
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++#include <gcrypt.h>
++#endif
++
+ // metadata queue definitions
+ pc_queue metadata_hub_queue;
+ #define metadata_hub_queue_size 500
+@@ -237,6 +241,10 @@ char *metadata_write_image_file(const char *buf, int len) {
+     EVP_MD_CTX_free(ctx);
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++    gcry_md_hash_buffer(GCRY_MD_MD5, img_md5, buf, len);
++#endif
++
+ #ifdef CONFIG_MBEDTLS
+ #if MBEDTLS_VERSION_MAJOR >= 4
+     size_t img_md5_len;
+diff --git a/player.c b/player.c
+index 657eeaf..ecc750a 100644
+--- a/player.c
++++ b/player.c
+@@ -59,6 +59,10 @@
+ #include <polarssl/havege.h>
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++#include <gcrypt.h>
++#endif
++
+ #ifdef CONFIG_OPENSSL
+ #include <openssl/aes.h> // needed for older AES stuff
+ #include <openssl/bio.h> // needed for BIO_new_mem_buf
+@@ -1397,6 +1401,25 @@ size_t avflush(rtsp_conn_info *conn) {
+ 
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++// AES-128-CBC without padding; len must be a multiple of 16
++static int gcrypt_aes_decrypt_cbc(unsigned char *ciphertext, int ciphertext_len,
++                                  unsigned char *key, unsigned char *iv,
++                                  unsigned char *plaintext) {
++  gcry_cipher_hd_t h;
++  int rc = -1;
++  if (gcry_cipher_open(&h, GCRY_CIPHER_AES128, GCRY_CIPHER_MODE_CBC, 0) == 0) {
++    if (gcry_cipher_setkey(h, key, 16) == 0 && gcry_cipher_setiv(h, iv, 16) == 0 &&
++        gcry_cipher_decrypt(h, plaintext, ciphertext_len, ciphertext, ciphertext_len) == 0)
++      rc = ciphertext_len;
++    gcry_cipher_close(h);
++  }
++  if (rc < 0)
++    debug(1, "AES decryption failed.");
++  return rc;
++}
++#endif
++
+ #ifdef CONFIG_OPENSSL
+ // Thanks to
+ // https://stackoverflow.com/questions/27558625/how-do-i-use-aes-cbc-encrypt-128-openssl-properly-in-ubuntu
+@@ -1632,6 +1655,9 @@ uint32_t player_put_packet(uint32_t ssrc, seq_t seqno, uint32_t actual_timestamp
+ #ifdef CONFIG_POLARSSL
+         aes_crypt_cbc(&conn->dctx, AES_DECRYPT, aeslen, iv, data, intermediate_buffer);
+ #endif
++#ifdef CONFIG_LIBGCRYPT
++        gcrypt_aes_decrypt_cbc(data, aeslen, conn->stream.aeskey, iv, intermediate_buffer);
++#endif
+ #ifdef CONFIG_OPENSSL
+         openssl_aes_decrypt_cbc(data, aeslen, conn->stream.aeskey, iv, intermediate_buffer);
+         // AES_cbc_encrypt(data, intermediate_buffer, aeslen, &conn->aes, iv, AES_DECRYPT);
+diff --git a/rtsp.c b/rtsp.c
+index d8985b5..c548ac3 100644
+--- a/rtsp.c
++++ b/rtsp.c
+@@ -63,6 +63,10 @@
+ #include <openssl/md5.h>
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++#include <gcrypt.h>
++#endif
++
+ #ifdef CONFIG_MBEDTLS
+ #include <mbedtls/version.h>
+ #if MBEDTLS_VERSION_MAJOR >= 4
+@@ -3864,6 +3868,23 @@ static int rtsp_classic_airplay_auth(char **nonce, rtsp_message *req, rtsp_messa
+   pthread_setcancelstate(oldState, NULL);
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++  gcry_md_hd_t mdh;
++  if (gcry_md_open(&mdh, GCRY_MD_MD5, 0) != 0)
++    goto authenticate;
++  gcry_md_write(mdh, username, strlen(username));
++  gcry_md_write(mdh, ":", 1);
++  gcry_md_write(mdh, realm, strlen(realm));
++  gcry_md_write(mdh, ":", 1);
++  gcry_md_write(mdh, config.password, strlen(config.password));
++  memcpy(digest_urp, gcry_md_read(mdh, GCRY_MD_MD5), sizeof(digest_urp));
++  gcry_md_reset(mdh);
++  gcry_md_write(mdh, req->method, strlen(req->method));
++  gcry_md_write(mdh, ":", 1);
++  gcry_md_write(mdh, uri, strlen(uri));
++  memcpy(digest_mu, gcry_md_read(mdh, GCRY_MD_MD5), sizeof(digest_mu));
++#endif
++
+ #ifdef CONFIG_MBEDTLS
+ #if MBEDTLS_VERSION_MAJOR >= 4
+   psa_hash_operation_t tctx = PSA_HASH_OPERATION_INIT;
+@@ -3953,6 +3974,19 @@ static int rtsp_classic_airplay_auth(char **nonce, rtsp_message *req, rtsp_messa
+   pthread_setcancelstate(oldState, NULL);
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++  gcry_md_reset(mdh);
++  gcry_md_write(mdh, buf, 32);
++  gcry_md_write(mdh, ":", 1);
++  gcry_md_write(mdh, *nonce, strlen(*nonce));
++  gcry_md_write(mdh, ":", 1);
++  for (i = 0; i < 16; i++)
++    snprintf((char *)buf + 2 * i, 3, "%02x", digest_mu[i]);
++  gcry_md_write(mdh, buf, 32);
++  memcpy(digest_total, gcry_md_read(mdh, GCRY_MD_MD5), sizeof(digest_total));
++  gcry_md_close(mdh);
++#endif
++
+ #ifdef CONFIG_MBEDTLS
+ #if MBEDTLS_VERSION_MAJOR >= 4
+   psa_hash_setup(&tctx, PSA_ALG_MD5);
+diff --git a/shairport.c b/shairport.c
+index 7a06caa..d772741 100644
+--- a/shairport.c
++++ b/shairport.c
+@@ -76,6 +76,10 @@
+ #include <openssl/md5.h>
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++#include <gcrypt.h>
++#endif
++
+ #if defined(CONFIG_DBUS_INTERFACE)
+ #include <glib.h>
+ #endif
+@@ -1908,6 +1912,9 @@ int parse_options(int argc, char **argv) {
+   else
+     memcpy(result, config.ap1_prefix, sizeof(result));
+ 
++#ifdef CONFIG_LIBGCRYPT
++  gcry_md_hash_buffer(GCRY_MD_MD5, result, config.ap1_prefix, sizeof(config.ap1_prefix));
++#else
+   // OpenSSL is mandatory for AirPlay 2
+   EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+   EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+@@ -1915,6 +1922,7 @@ int parse_options(int argc, char **argv) {
+   unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
+   EVP_DigestFinal_ex(mdctx, result, &md5_digest_len);
+   EVP_MD_CTX_free(mdctx);
++#endif
+ 
+   // now, convert it into a type 4 UUID
+   // see https://stackoverflow.com/questions/10867405/generating-v5-uuid-what-is-name-and-namespace
+@@ -2682,6 +2690,12 @@ int main(int argc, char **argv) {
+   // Mbed TLS 4 does all hashing, encryption and RSA through PSA
+   if (psa_crypto_init() != PSA_SUCCESS)
+     die("can not initialise PSA Crypto!");
++#endif
++#ifdef CONFIG_LIBGCRYPT
++  if (!gcry_check_version(GCRYPT_VERSION))
++    die("libgcrypt version mismatch!");
++  gcry_control(GCRYCTL_DISABLE_SECMEM, 0);
++  gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
+ #endif
+   /* Check if we are called with -V or --version parameter */
+   if (argc >= 2 && ((strcmp(argv[1], "-V") == 0) || (strcmp(argv[1], "--version") == 0))) {
+@@ -3653,6 +3667,16 @@ int main(int argc, char **argv) {
+     EVP_MD_CTX_free(mdctx);
+ #endif
+ 
++#ifdef CONFIG_LIBGCRYPT
++    gcry_md_hd_t mdh;
++    if (gcry_md_open(&mdh, GCRY_MD_MD5, 0) != 0)
++      die("can not create an MD5 context");
++    gcry_md_write(mdh, config.service_name, strlen(config.service_name));
++    gcry_md_write(mdh, config.hw_addr, sizeof(config.hw_addr));
++    memcpy(ap_md5, gcry_md_read(mdh, GCRY_MD_MD5), sizeof(ap_md5));
++    gcry_md_close(mdh);
++#endif
++
+ #ifdef CONFIG_MBEDTLS
+ #if MBEDTLS_VERSION_MAJOR >= 4
+     psa_hash_operation_t tctx = PSA_HASH_OPERATION_INIT;

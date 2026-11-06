@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only
+ * Copyright (C) 2026 Srini K */
+
 #include "cast.h"
 
 #include <errno.h>
@@ -5,9 +8,9 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <openssl/err.h>
-#include <openssl/ssl.h>
+#include <gnutls/gnutls.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,20 +31,20 @@
 #define PING_INTERVAL_MS 5000
 #define DEAD_TIMEOUT_MS 20000
 
-static SSL_CTX *g_ctx;
+static gnutls_certificate_credentials_t g_cred;
+static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 
-void cast_global_init(void) {
-  if (g_ctx)
-    return;
-  OPENSSL_init_ssl(0, NULL);
-  g_ctx = SSL_CTX_new(TLS_client_method());
+static void tls_init(void) {
   /* Cast devices present self-signed device certificates; the Cast device-auth
-   * challenge is not required by the Default Media Receiver. */
-  SSL_CTX_set_verify(g_ctx, SSL_VERIFY_NONE, NULL);
-  SSL_CTX_set_mode(g_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE);
+   * challenge is not required by the Default Media Receiver, so no verification
+   * is configured on these credentials. */
+  if (gnutls_certificate_allocate_credentials(&g_cred) < 0)
+    g_cred = NULL;
 }
 
-int cast_fd(const cast_conn *c) { return c->ssl ? c->fd : -1; }
+void cast_global_init(void) { pthread_once(&g_once, tls_init); }
+
+int cast_fd(const cast_conn *c) { return c->tls ? c->fd : -1; }
 
 static int wait_fd(int fd, short ev, int timeout_ms) {
   struct pollfd p = {.fd = fd, .events = ev};
@@ -53,9 +56,9 @@ static int wait_fd(int fd, short ev, int timeout_ms) {
 }
 
 static void teardown(cast_conn *c) {
-  if (c->ssl) {
-    SSL_free(c->ssl);
-    c->ssl = NULL;
+  if (c->tls) {
+    gnutls_deinit(c->tls);
+    c->tls = NULL;
   }
   if (c->fd >= 0)
     close(c->fd);
@@ -67,32 +70,32 @@ static void teardown(cast_conn *c) {
   c->player_state[0] = 0;
 }
 
-static int ssl_write_all(cast_conn *c, const uint8_t *buf, size_t len) {
+/* Waits for the direction a non-blocking GnuTLS call is blocked on. */
+static void wait_tls(cast_conn *c, int timeout_ms) {
+  wait_fd(c->fd, gnutls_record_get_direction(c->tls) ? POLLOUT : POLLIN, timeout_ms);
+}
+
+static int tls_write_all(cast_conn *c, const uint8_t *buf, size_t len) {
   size_t off = 0;
   int64_t deadline = now_ms() + 5000;
   while (off < len) {
-    int n = SSL_write(c->ssl, buf + off, (int)(len - off));
+    ssize_t n = gnutls_record_send(c->tls, buf + off, len - off);
     if (n > 0) {
       off += (size_t)n;
       continue;
     }
-    int err = SSL_get_error(c->ssl, n);
     int left = (int)(deadline - now_ms());
-    if (left <= 0)
+    if (left <= 0 || (n != GNUTLS_E_AGAIN && n != GNUTLS_E_INTERRUPTED))
       return -1;
-    if (err == SSL_ERROR_WANT_WRITE)
-      wait_fd(c->fd, POLLOUT, left);
-    else if (err == SSL_ERROR_WANT_READ)
-      wait_fd(c->fd, POLLIN, left);
-    else
-      return -1;
+    /* GnuTLS requires the same data to be passed again after E_AGAIN */
+    wait_tls(c, left);
   }
   return 0;
 }
 
 static int send_raw(cast_conn *c, const char *dst, const char *ns, const char *payload) {
   static __thread uint8_t buf[CAST_MAX_MSG];
-  if (!c->ssl)
+  if (!c->tls)
     return -1;
   size_t n = cast_encode(buf, sizeof(buf), SENDER_ID, dst, ns, payload);
   if (!n) {
@@ -101,7 +104,7 @@ static int send_raw(cast_conn *c, const char *dst, const char *ns, const char *p
   }
   if (strcmp(ns, NS_HEARTBEAT))
     LOGD("%s: -> %s %s", c->tag, dst, payload);
-  if (ssl_write_all(c, buf, n) < 0) {
+  if (tls_write_all(c, buf, n) < 0) {
     LOGW("%s: write failed", c->tag);
     return -1;
   }
@@ -216,12 +219,13 @@ static int read_available(cast_conn *c) {
   for (;;) {
     if (c->rlen >= sizeof(c->rbuf))
       return -1;
-    int n = SSL_read(c->ssl, c->rbuf + c->rlen, (int)(sizeof(c->rbuf) - c->rlen));
+    ssize_t n = gnutls_record_recv(c->tls, c->rbuf + c->rlen, sizeof(c->rbuf) - c->rlen);
     if (n <= 0) {
-      int err = SSL_get_error(c->ssl, n);
-      if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+      if (n == GNUTLS_E_AGAIN || n == GNUTLS_E_INTERRUPTED)
         break;
-      return -1;
+      if (n < 0 && !gnutls_error_is_fatal((int)n))
+        continue; /* e.g. a warning alert */
+      return -1;  /* EOF or fatal error */
     }
     c->rlen += (size_t)n;
     c->last_rx_ms = now_ms();
@@ -240,7 +244,7 @@ static int read_available(cast_conn *c) {
         cast_msg_free(&m);
       }
       off += 4 + len;
-      if (!c->ssl)
+      if (!c->tls)
         return -1;
     }
     if (off) {
@@ -252,7 +256,7 @@ static int read_available(cast_conn *c) {
 }
 
 int cast_pump(cast_conn *c, int timeout_ms) {
-  if (!c->ssl)
+  if (!c->tls)
     return -1;
   int64_t t = now_ms();
   if (t - c->last_ping_ms >= PING_INTERVAL_MS) {
@@ -264,7 +268,7 @@ int cast_pump(cast_conn *c, int timeout_ms) {
     LOGW("%s: no traffic for %d s, connection lost", c->tag, DEAD_TIMEOUT_MS / 1000);
     goto dead;
   }
-  if (!SSL_pending(c->ssl) && timeout_ms > 0) {
+  if (!gnutls_record_check_pending(c->tls) && timeout_ms > 0) {
     int r = wait_fd(c->fd, POLLIN, timeout_ms);
     if (r <= 0)
       return 0;
@@ -334,17 +338,25 @@ int cast_open(cast_conn *c, const char *tag, const char *host, int port, int tim
       goto fail;
     }
   }
-  c->ssl = SSL_new(g_ctx);
-  SSL_set_fd(c->ssl, c->fd);
+  if (!g_cred || gnutls_init(&c->tls, GNUTLS_CLIENT | GNUTLS_NONBLOCK) < 0) {
+    c->tls = NULL;
+    goto fail;
+  }
+  if (gnutls_set_default_priority(c->tls) < 0 ||
+      gnutls_credentials_set(c->tls, GNUTLS_CRD_CERTIFICATE, g_cred) < 0)
+    goto fail;
+  gnutls_transport_set_int(c->tls, c->fd);
   for (;;) {
-    int hr = SSL_connect(c->ssl);
-    if (hr == 1)
+    int hr = gnutls_handshake(c->tls);
+    if (hr == GNUTLS_E_SUCCESS)
       break;
-    int err = SSL_get_error(c->ssl, hr);
     int left = (int)(deadline - now_ms());
-    if (left <= 0 || (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE))
+    if (left <= 0 || gnutls_error_is_fatal(hr)) {
+      LOGD("%s: TLS handshake: %s", tag, gnutls_strerror(hr));
+      errno = left <= 0 ? ETIMEDOUT : EPROTO;
       goto fail;
-    wait_fd(c->fd, err == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT, left);
+    }
+    wait_tls(c, left);
   }
   c->last_rx_ms = c->last_ping_ms = now_ms();
   if (send_raw(c, RECEIVER_ID, NS_CONNECTION, "{\"type\":\"CONNECT\"}") < 0)
@@ -362,12 +374,12 @@ fail:
 }
 
 void cast_close(cast_conn *c) {
-  if (!c->ssl)
+  if (!c->tls)
     return;
   if (c->app_connected && c->transport_id[0])
     send_raw(c, c->transport_id, NS_CONNECTION, "{\"type\":\"CLOSE\"}");
   send_raw(c, RECEIVER_ID, NS_CONNECTION, "{\"type\":\"CLOSE\"}");
-  SSL_shutdown(c->ssl);
+  gnutls_bye(c->tls, GNUTLS_SHUT_WR); /* best effort; non-blocking */
   teardown(c);
 }
 

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-only
+ * Copyright (C) 2026 Srini K */
 /* Unit tests for the protocol / buffering building blocks (no network needed). */
 #include <stdio.h>
 #include <stdlib.h>

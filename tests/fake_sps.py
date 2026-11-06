@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Srini K
 """Stand-in for shairport-sync used by tests/integration.sh.
 
 airplay2cast starts it exactly like shairport-sync ("-c <config>"). It reads the

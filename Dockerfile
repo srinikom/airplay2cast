@@ -1,7 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Srini K
 # airplay2cast — AirPlay 2 receiver bridge for Chromecast / Google Cast devices.
 #
 # Stages:
-#   deps      builds pinned nqptp + shairport-sync (AirPlay 2, stdout backend, metadata socket)
+#   deps      builds pinned nqptp + shairport-sync (AirPlay 2, stdout backend, metadata socket);
+#             shairport-sync is patched to use libgcrypt instead of OpenSSL (patches/)
 #   bridge    builds the airplay2cast C bridge
 #   binaries  export target for running natively on a Debian 12 host:
 #             docker build --target binaries --output type=local,dest=out .
@@ -14,16 +17,18 @@ ARG NQPTP_REV=ab8fb67483411640fd7f1e193889482f2421c37c
 ARG SPS_REV=0a34fbda83724cc06266aadcf7c88acc8fef4e7d
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential git autoconf automake libtool pkg-config xxd ca-certificates \
-      libpopt-dev libconfig-dev libssl-dev libsoxr-dev libavahi-client-dev \
+      libpopt-dev libconfig-dev libsoxr-dev libavahi-client-dev \
       libplist-dev libplist-utils libsodium-dev libgcrypt20-dev uuid-dev \
       libavutil-dev libavcodec-dev libavformat-dev libswresample-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN git clone https://github.com/mikebrady/nqptp.git && cd nqptp && git checkout ${NQPTP_REV} \
     && autoreconf -fi && ./configure && make -j"$(nproc)"
+COPY patches /patches
 RUN git clone https://github.com/mikebrady/shairport-sync.git && cd shairport-sync && git checkout ${SPS_REV} \
+    && git apply /patches/shairport-sync-libgcrypt.patch \
     && autoreconf -fi \
-    && ./configure --sysconfdir=/etc --with-airplay-2 --with-avahi --with-ssl=openssl \
+    && ./configure --sysconfdir=/etc --with-airplay-2 --with-avahi --with-ssl=gcrypt \
          --with-soxr --with-stdout --with-metadata --with-metadata-multicast --without-alsa \
     && make -j"$(nproc)"
 RUN mkdir -p /out/lib && cp nqptp/nqptp shairport-sync/shairport-sync /out/ \
@@ -34,16 +39,18 @@ RUN mkdir -p /out/lib && cp nqptp/nqptp shairport-sync/shairport-sync /out/ \
 RUN d=/out/share/doc/airplay2cast && s=/out/share/src/airplay2cast && mkdir -p $d $s \
     && cp nqptp/LICENSE $d/LICENSE.nqptp \
     && cp shairport-sync/LICENSES $d/LICENSES.shairport-sync \
+    && cp /patches/*.patch $d/ \
     && cp /usr/share/doc/libavahi-client3/copyright $d/copyright.avahi \
     && git -C nqptp archive --format=tar.gz --prefix=nqptp-${NQPTP_REV}/ \
          -o $s/nqptp-${NQPTP_REV}.tar.gz HEAD \
     && git -C shairport-sync archive --format=tar.gz --prefix=shairport-sync-${SPS_REV}/ \
-         -o $s/shairport-sync-${SPS_REV}.tar.gz HEAD
+         -o $s/shairport-sync-${SPS_REV}.tar.gz HEAD \
+    && cp /patches/*.patch $s/
 COPY LICENSE /out/share/doc/airplay2cast/LICENSE
 COPY THIRD_PARTY_NOTICES.md /out/share/doc/airplay2cast/
 
 FROM debian:${DEBIAN} AS bridge
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential libssl-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libgnutls28-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Makefile ./
@@ -57,7 +64,7 @@ COPY --from=bridge /src/airplay2cast /
 
 FROM debian:${DEBIAN}-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      dbus avahi-daemon libpopt0 libconfig9 libssl3 libsoxr0 libavahi-client3 \
+      dbus avahi-daemon libpopt0 libconfig9 libgnutls30 libsoxr0 libavahi-client3 \
       libplist3 libsodium23 libgcrypt20 libuuid1 \
       libavutil57 libavcodec59 libavformat59 libswresample4 \
     && rm -rf /var/lib/apt/lists/* \

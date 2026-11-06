@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only
+ * Copyright (C) 2026 Srini K */
+
 #ifndef AP2C_BRIDGE_H
 #define AP2C_BRIDGE_H
 

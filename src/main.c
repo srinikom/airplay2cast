@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-only
+ * Copyright (C) 2026 Srini K */
 /* airplay2cast: exposes every Google Cast device on the LAN as an AirPlay 2 receiver.
  *
  *   iPhone/Mac --AirPlay 2--> shairport-sync (one per Cast device, PCM on stdout)
