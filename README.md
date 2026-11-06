@@ -36,13 +36,19 @@ cross-compiled with Debian's cross toolchain, and the target's runtime packages 
 unpacked onto the official target base image. No QEMU emulation is needed:
 
 ```sh
-docker buildx build --platform linux/arm64 -t airplay2cast:latest --load .
-docker save airplay2cast:latest | ssh pine64 docker load   # then on the target:
-docker compose up -d --no-build
+make docker-image PLATFORM=linux/arm64        # image for the target (omit PLATFORM: native)
+make docker-binaries PLATFORM=linux/arm64     # out/: programs + tests/test_unit
+make docker-deploy DEPLOY_HOST=user@pine64    # docker load + compose up on the target
+make docker-test DEPLOY_HOST=user@pine64 TEST_SPEAKER="Hallway speaker"
 ```
 
-Native builds run the unit tests during the build. Cross builds export
-`tests/test_unit` with the binaries (below), to be run on the target. It runs D-Bus, Avahi, NQPTP and the bridge in one container with
+`docker-deploy` copies the image and `compose.yaml` to `DEPLOY_HOST:DEPLOY_DIR` (default
+`~/airplay2cast`) and recreates the service; nothing is built on the target.
+`docker-test` runs the unit tests from `out/` on the target, checks that the deployed
+service started its receivers, and, with `TEST_SPEAKER`, runs the integration test
+against that Cast device. Native image builds also run the unit tests during the
+build. The targets are thin wrappers, e.g. `docker buildx build --platform linux/arm64
+-t airplay2cast:latest --load .`; `make -n <target>` shows the exact commands. It runs D-Bus, Avahi, NQPTP and the bridge in one container with
 host networking (required for mDNS, PTP and the streaming ports). UDP 319/320 must be
 free: stop any other NQPTP / AirPlay 2 receiver (e.g. AirConnect, shairport-sync)
 first.
@@ -83,7 +89,7 @@ helper container can supply the root-only services. Avahi and D-Bus are shared
 through `./run/dbus`; NQPTP's clock is shared through host IPC.
 
 ```sh
-docker buildx build --platform linux/arm64 --target binaries --output type=local,dest=out .
+make docker-binaries PLATFORM=linux/arm64
 # out/: airplay2cast, shairport-sync, nqptp, lib/ (avahi client), tests/test_unit
 out/tests/test_unit                          # unit tests, on the target
 scripts/run-native.sh -i "Hallway speaker"   # starts the support-services container, then the native binaries

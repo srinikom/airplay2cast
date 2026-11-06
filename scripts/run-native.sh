@@ -5,8 +5,7 @@
 # The root-only pieces (D-Bus + Avahi for AirPlay advertising, NQPTP on UDP 319/320)
 # come from the "support-services" container, shared via ./run/dbus and host IPC.
 #
-#   docker build --target binaries --output type=local,dest=out .   # all programs
-#     (for another architecture: docker buildx build --platform linux/arm64 ...)
+#   make docker-binaries [PLATFORM=linux/arm64]    # all programs, into out/
 #   make                                    # optional: a local ./airplay2cast is preferred
 #   scripts/run-native.sh [airplay2cast options]      # also starts support-services
 set -eu
