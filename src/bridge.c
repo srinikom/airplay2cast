@@ -25,6 +25,9 @@
 #define RETRY_MS 5000
 #define DUCK_HOLD_MS 2500    /* keep the launch volume at least this long after LAUNCH */
 #define DUCK_MAX_MS 12000    /* restore even if playback never started */
+/* Audio a new session collects before LOAD. Cast receivers start playing once they
+ * hold about 1.2 s; fed from only ~0.2 s they tend to underrun right after starting. */
+#define LOAD_CUSHION_MS 800
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -268,6 +271,7 @@ static void handle_meta(device *d, const uint8_t *pkt, size_t len) {
     if (!strcmp(code, "pbeg")) {
       LOGI("%s: AirPlay play begin", d->tag);
       d->ap_active = 1;
+      d->prepared = 0;
       d->preempted = 0;
     } else if (!strcmp(code, "pend")) {
       LOGI("%s: AirPlay play end", d->tag);
@@ -320,7 +324,15 @@ static void restore_duck(device *d, int force) {
   d->duck_saved = -1;
 }
 
-static int start_cast(device *d) {
+static int receiver_ready(const device *d) {
+  return cast_is_open(&d->cc) && !strcmp(d->cc.app_id, CAST_APP_DEFAULT_MEDIA_RECEIVER) &&
+         d->cc.transport_id[0];
+}
+
+/* Connects and launches the Default Media Receiver (lowering the volume for its launch
+ * chime) unless it is already running. Called when an AirPlay session begins, so the
+ * chime plays before the first audio arrives, and again before each LOAD. */
+static int prepare_cast(device *d) {
   cast_device info;
   pthread_mutex_lock(&d->mu);
   info = d->info;
@@ -344,6 +356,16 @@ static int start_cast(device *d) {
     d->launch_ms = now_ms();
     d->duck_until_ms = d->launch_ms + DUCK_HOLD_MS;
   }
+  return 0;
+}
+
+static int start_cast(device *d) {
+  if (prepare_cast(d) < 0)
+    return -1;
+  cast_device info;
+  pthread_mutex_lock(&d->mu);
+  info = d->info;
+  pthread_mutex_unlock(&d->mu);
   char ip[64];
   if (d->cfg->http_ip[0])
     snprintf(ip, sizeof(ip), "%s", d->cfg->http_ip);
@@ -360,6 +382,10 @@ static int start_cast(device *d) {
     return -1;
   }
   d->media_loaded = 1;
+  d->load_ms = now_ms();
+  d->playing_seen = 0;
+  d->buffering_warned = 0;
+  d->underrun = 0;
   if (d->cfg->hw_volume)
     d->volume_dirty = 1;
   return 0;
@@ -385,6 +411,7 @@ static void tick(device *d) {
 
   if (d->flushed) {
     d->flushed = 0;
+    d->flush_ms = t;
     stream_mark_session_next(&d->st);
     if (d->media_loaded && cast_is_open(&d->cc)) {
       /* cut stale audio buffered in the speaker; audio after the flush reloads */
@@ -421,12 +448,47 @@ static void tick(device *d) {
     }
   }
 
-  if (has_audio && !d->media_loaded && !d->preempted && t >= d->next_retry_ms) {
+  /* audio from before a flush must not reload the media that the flush just stopped */
+  if (has_audio && last > d->flush_ms && !d->media_loaded && !d->preempted &&
+      t >= d->next_retry_ms && stream_session_ms(&d->st) >= LOAD_CUSHION_MS) {
     if (start_cast(d) < 0) {
       d->next_retry_ms = now_ms() + RETRY_MS;
       LOGW("%s: cast start failed, retrying in %d s", d->tag, RETRY_MS / 1000);
     }
     t = now_ms();
+  } else if (d->ap_active && !d->prepared && !has_audio && !d->media_loaded &&
+             !d->preempted && t >= d->next_retry_ms) {
+    /* AirPlay session started, audio not flowing yet: get the receiver (and its launch
+     * chime) going now instead of after the first audio. One attempt per session; the
+     * audio path retries if it fails. */
+    d->prepared = 1;
+    if (!receiver_ready(d)) {
+      LOGI("%s: preparing speaker for the AirPlay session", d->tag);
+      if (prepare_cast(d) < 0)
+        LOGW("%s: speaker not ready yet; retrying when audio arrives", d->tag);
+      t = now_ms();
+    }
+  }
+
+  /* receiver start-up and underrun diagnostics */
+  if (d->media_loaded && cast_is_open(&d->cc)) {
+    const char *ps = d->cc.player_state;
+    if (!strcmp(ps, "PLAYING") && !d->playing_seen) {
+      d->playing_seen = 1;
+      LOGI("%s: speaker playing %s%.1f s after %s", d->tag, d->underrun ? "again " : "",
+           (double)(t - d->load_ms) / 1000.0, d->underrun ? "the underrun" : "load");
+    } else if (!strcmp(ps, "BUFFERING") && d->playing_seen) {
+      d->playing_seen = 0;
+      d->underrun = 1;
+      d->load_ms = t;
+      d->buffering_warned = 0;
+      LOGW("%s: speaker buffering (underrun)", d->tag);
+    } else if (!d->playing_seen && !d->buffering_warned && t - d->load_ms > 3000) {
+      d->buffering_warned = 1;
+      LOGW("%s: speaker not playing %.1f s after load (state %s, %.1f s of audio delivered)",
+           d->tag, (double)(t - d->load_ms) / 1000.0, ps[0] ? ps : "?",
+           (double)d->st.client_sent / (double)(stream_frame_bytes(&d->st) * (size_t)d->st.rate));
+    }
   }
 
   if (cast_is_open(&d->cc)) {
@@ -440,7 +502,7 @@ static void tick(device *d) {
     int64_t quiet = last ? t - last : t - d->launch_ms;
     if (!has_audio && quiet > (int64_t)d->cfg->idle_timeout_s * 1000 && !d->ap_active)
       release_cast(d, "idle");
-    else if (!has_audio && !d->media_loaded && !d->ours && quiet > 10000)
+    else if (!has_audio && !d->media_loaded && !d->ours && !d->ap_active && quiet > 10000)
       cast_close(&d->cc); /* nothing of ours on the speaker */
   }
 }

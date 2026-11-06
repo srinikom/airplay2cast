@@ -120,6 +120,13 @@ int64_t stream_last_write(stream *s) {
   return t;
 }
 
+int stream_session_ms(stream *s) {
+  pthread_mutex_lock(&s->mu);
+  uint64_t n = s->session_pending ? 0 : s->wpos - s->session_pos;
+  pthread_mutex_unlock(&s->mu);
+  return (int)(n * 1000 / ((uint64_t)s->rate * stream_frame_bytes(s)));
+}
+
 void stream_kick_clients(stream *s) {
   pthread_mutex_lock(&s->mu);
   s->generation++;

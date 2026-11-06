@@ -5,8 +5,8 @@
 
 airplay2cast starts it exactly like shairport-sync ("-c <config>"). It reads the
 metadata socket port and output rate from the generated config, then plays a scripted
-AirPlay session: play-begin, 8 s audio, flush (pause), 4 s quiet, resume with 6 s audio,
-play-end. Events are sent in shairport-sync's UDP metadata format; PCM (S16LE stereo)
+AirPlay session: play-begin, 0.9 s until the first audio (as with a real sender), 8 s
+audio, flush (pause), 4 s quiet, resume with 6 s audio, play-end. Events are sent in shairport-sync's UDP metadata format; PCM (S16LE stereo)
 goes to stdout in real time, as shairport-sync's stdout backend does.
 """
 import math
@@ -52,6 +52,7 @@ event("ssnc", "abeg")
 event("core", "minm", b"Integration test")
 event("core", "asar", b"airplay2cast")
 event("ssnc", "pbeg")
+time.sleep(0.9)
 play(8, 440)
 event("ssnc", "pfls")
 event("ssnc", "paus")

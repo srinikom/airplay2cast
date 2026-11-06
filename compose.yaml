@@ -6,6 +6,9 @@ services:
     # mDNS (discovery + advertising), PTP (UDP 319/320), AirPlay and Cast all need the LAN
     network_mode: host
     init: true
+    # lets shairport-sync give its audio threads real-time priority (fewer dropouts
+    # when the host is busy)
+    cap_add: [SYS_NICE]
     restart: unless-stopped
     stop_grace_period: 20s
     environment:

@@ -40,6 +40,8 @@ void stream_mark_session_start(stream *s);
 /* The next write (e.g. after a flush) begins a new session; new clients start there. */
 void stream_mark_session_next(stream *s);
 int64_t stream_last_write(stream *s);
+/* Milliseconds of audio written since the current session began. */
+int stream_session_ms(stream *s);
 void stream_kick_clients(stream *s);
 int stream_client_count(stream *s);
 

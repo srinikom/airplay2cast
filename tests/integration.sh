@@ -31,6 +31,9 @@ expect 1 "AirPlay flush" "flush event received"
 expect 1 "releasing speaker (idle)" "speaker released after idle timeout"
 expect 1 "lowering speaker volume" "volume lowered for the launch chime"
 expect 1 "restoring speaker volume" "volume restored after launch"
+expect 1 "preparing speaker for the AirPlay session" "receiver prepared at play begin"
+expect 2 "speaker playing [0-9.]* s after load" "speaker reported playing after each load"
+expect 0 "speaker not playing\\|underrun" "no slow start or underrun"
 grep -q "streaming /stream/" "$log" && echo "ok   speaker fetched the HTTP stream" ||
   { echo "FAIL speaker never fetched the stream"; fail=1; }
 [ "$rc" -eq 0 ] && echo "ok   clean shutdown" || { echo "FAIL exit status $rc"; fail=1; }

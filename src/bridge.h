@@ -49,6 +49,7 @@ typedef struct device {
 
   /* AirPlay events (set by the control thread from metadata) */
   int ap_active;           /* between pbeg and pend */
+  int prepared;            /* receiver start attempted for this AirPlay session */
   int flushed;             /* flush seen; reload needed when audio resumes */
   char title[256], artist[256];
   double ap_volume_db;     /* -30..0, or -144 for mute */
@@ -63,6 +64,11 @@ typedef struct device {
   int64_t launch_ms;
   double duck_saved;       /* volume to restore after the launch chime, <0 = none */
   int64_t duck_until_ms;
+  int64_t load_ms;         /* when the current media was loaded */
+  int64_t flush_ms;        /* last AirPlay flush; only audio written after it reloads */
+  int playing_seen;        /* receiver reported PLAYING for the current load */
+  int buffering_warned;
+  int underrun;            /* waiting for PLAYING again after an underrun */
 } device;
 
 device *device_start(const cast_device *info, int slot, const bridge_config *cfg);

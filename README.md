@@ -123,9 +123,12 @@ The avahi client libraries ship in `out/lib`.
 
 ## Behaviour
 
-* **Start:** when audio arrives, the bridge connects to the speaker, launches the
-  Default Media Receiver (only if it isn't already running), and LOADs
-  `http://<bridge>:8089/stream/<cast-id>.wav`.
+* **Start:** when an AirPlay session begins, the bridge connects to the speaker and
+  launches the Default Media Receiver (only if it isn't already running), so its
+  launch chime plays while the sender is still starting up. Once 0.8 s of audio has
+  arrived it LOADs `http://<bridge>:8089/stream/<cast-id>.wav`. Starting from that
+  cushion, the speaker plays about 0.4 s after the LOAD; with less, Cast receivers
+  tend to start and then underrun.
 * **Launch chime:** Cast speakers play a connection sound when a receiver app
   launches. The bridge lowers the speaker to at most 5% before LAUNCH and restores the
   previous volume once playback runs (at least 2.5 s after launch). It never raises a
@@ -135,9 +138,11 @@ The avahi client libraries ship in `out/lib`.
   speaker's own volume is never changed, so set its preferred level with Google Home
   or its buttons. `--hw-volume` maps the slider to the speaker volume instead.
 * **Pause / skip:** an AirPlay flush stops the speaker's media at once, so stale
-  buffered audio is cut. The next audio reloads the stream without relaunching the
-  app, so there's no second chime. Short gaps are filled with silence so the speaker
-  keeps the stream open.
+  buffered audio is cut. Only audio sent after the flush reloads the stream, without
+  relaunching the app, so there's no second chime. Short gaps are filled with silence
+  so the speaker keeps the stream open.
+* **Diagnostics:** the log shows how long each start takes (`speaker playing 0.4 s
+  after load`) and warns about slow starts and underruns.
 * **Release:** after `--idle-timeout` seconds without audio the bridge stops its app
   and disconnects, so the speaker is free for other use.
 * **Someone else casts:** if another app or sender takes over the speaker, the bridge
