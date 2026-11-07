@@ -276,6 +276,10 @@ static void handle_meta(device *d, const uint8_t *pkt, size_t len) {
     } else if (!strcmp(code, "pend")) {
       LOGI("%s: AirPlay play end", d->tag);
       d->ap_active = 0;
+      /* YouTube ends and begins a play session per track; like a pause, each one adds
+       * ~1 s to the speaker's backlog if the media keeps running (4.5 s over 4 tracks) */
+      if (d->cfg->flush_stop)
+        d->flushed = 1;
     } else if (!strcmp(code, "pfls")) {
       LOGI("%s: AirPlay flush", d->tag);
       if (d->cfg->flush_stop)
