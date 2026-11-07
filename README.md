@@ -186,6 +186,7 @@ Binaries and image cross-built on x86-64 (no emulation), tested on the Pine64.
 | tone through Cast: steady PLAYING, ~1.4 s latency, volume restored | pass (x86 + Pine64) | pass |
 | integration test (fake shairport-sync, real Nest Audio) | pass | |
 | idle footprint, 6 receivers; restart time | | 31 MiB RAM, ~2–4% CPU; 1.5 s |
+| image size (arm64), minimal FFmpeg | | 114 MB on disk, 41 MB to transfer (was 261 / 104 MB) |
 | bridge CPU, wake-ups and memory before/after tuning | see [docs/TUNING.md](docs/TUNING.md) | |
 
 **Not covered by automated tests:**

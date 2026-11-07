@@ -1,0 +1,50 @@
+shairport-sync: don't require libavformat
+
+shairport-sync includes <libavformat/avformat.h> but calls no libavformat
+function: it decodes with libavcodec and resamples with libswresample. Dropping
+the include and the configure check lets it build against an FFmpeg that has
+only the decoders it needs.
+Applies to shairport-sync 0a34fbda83724cc06266aadcf7c88acc8fef4e7d (5.6.2),
+after shairport-sync-libgcrypt.patch.
+
+Copyright (C) 2026 Srini K
+License: MIT, the same terms as shairport-sync, so it can be offered upstream.
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -513,15 +513,6 @@
+     )]
+   )
+   PKG_CHECK_MODULES(
+-    [libavformat], [libavformat],
+-    [CFLAGS="${libavformat_CFLAGS} ${CFLAGS}" LIBS="${libavformat_LIBS} ${LIBS}"],
+-    [AC_CHECK_LIB(
+-      [avformat], [avformat_new_stream],
+-      [],
+-      [AC_MSG_ERROR([FFmpeg requires libavformat -- libavformat-dev suggested])]
+-    )]
+-  )
+-  PKG_CHECK_MODULES(
+     [libswresample], [libswresample],
+     [CFLAGS="${libswresample_CFLAGS} ${CFLAGS}" LIBS="${libswresample_LIBS} ${LIBS}"],
+     [AC_CHECK_LIB(
+--- a/player.h
++++ b/player.h
+@@ -32,7 +32,6 @@
+ 
+ #ifdef CONFIG_FFMPEG
+ #include <libavcodec/avcodec.h>
+-#include <libavformat/avformat.h>
+ #include <libavutil/channel_layout.h>
+ #include <libavutil/opt.h>
+ #include <libswresample/swresample.h>
+--- a/rtp.c
++++ b/rtp.c
+@@ -52,7 +52,6 @@
+ #include "ptp-utilities.h"
+ #include "utilities/structured_buffer.h"
+ #include <libavcodec/avcodec.h>
+-#include <libavformat/avformat.h>
+ #include <libavutil/channel_layout.h>
+ #include <libavutil/opt.h>
+ #include <libswresample/swresample.h>

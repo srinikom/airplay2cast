@@ -6,7 +6,9 @@
 #   toolchain build tools and target-architecture -dev libraries; runs on the build
 #             machine and cross-compiles when --platform differs (amd64 <-> arm64)
 #   deps      builds pinned nqptp + shairport-sync (AirPlay 2, stdout backend, metadata socket);
-#             shairport-sync is patched to use libgcrypt instead of OpenSSL (patches/)
+#             shairport-sync is patched to use libgcrypt instead of OpenSSL and to need no
+#             libavformat (patches/), and links a minimal static FFmpeg: the AAC, ALAC and
+#             PCM decoders and swresample, nothing else
 #   bridge    builds the airplay2cast C bridge and its unit tests
 #   binaries  export target: the programs, license texts and sources (+ tests/test_unit)
 #             docker buildx build --platform linux/arm64 --target binaries --output type=local,dest=out .
@@ -32,11 +34,11 @@ RUN set -e; \
     if [ "$TARGETARCH" = "$BUILDARCH" ]; then cc=build-essential; \
     else dpkg --add-architecture "$TARGETARCH"; cc="crossbuild-essential-$TARGETARCH"; fi; \
     libs="libpopt-dev libconfig-dev libsoxr-dev libavahi-client-dev libplist-dev libsodium-dev \
-          libgcrypt20-dev uuid-dev libavutil-dev libavcodec-dev libavformat-dev \
-          libswresample-dev libgnutls28-dev"; \
+          libgcrypt20-dev uuid-dev libgnutls28-dev"; \
     apt-get update; \
     apt-get install -y --no-install-recommends $cc git autoconf automake libtool pkg-config \
-      xxd ca-certificates libplist-utils $(for l in $libs; do echo "$l:$TARGETARCH"; done); \
+      xxd ca-certificates curl xz-utils nasm libplist-utils \
+      $(for l in $libs; do echo "$l:$TARGETARCH"; done); \
     rm -rf /var/lib/apt/lists/*
 # pkg-config and configure look for target libraries only
 ENV PKG_CONFIG_PATH= PKG_CONFIG=pkg-config
@@ -45,13 +47,30 @@ WORKDIR /src
 FROM toolchain AS deps
 ARG NQPTP_REV=ab8fb67483411640fd7f1e193889482f2421c37c
 ARG SPS_REV=0a34fbda83724cc06266aadcf7c88acc8fef4e7d
+ARG FFMPEG_VERSION=5.1.6
+ARG FFMPEG_SHA256=f4fa066278f7a47feab316fef905f4db0d5e9b589451949740f83972b30901bd
+# FFmpeg (LGPL-2.1+, no GPL or nonfree parts): only what shairport-sync uses, static, into
+# /usr/local of the build environment
+RUN t=$(cat /etc/target-triplet) \
+    && curl -sSfLO https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz \
+    && echo "${FFMPEG_SHA256}  ffmpeg-${FFMPEG_VERSION}.tar.xz" | sha256sum -c - \
+    && tar -xf ffmpeg-${FFMPEG_VERSION}.tar.xz && cd ffmpeg-${FFMPEG_VERSION} \
+    && ./configure --prefix=/usr/local --enable-cross-compile --cross-prefix=$t- \
+         --arch=${t%%-*} --target-os=linux --pkg-config=pkg-config \
+         --disable-everything --disable-autodetect --disable-programs --disable-doc \
+         --disable-network --disable-avdevice --disable-avformat --disable-avfilter \
+         --disable-swscale --disable-postproc --enable-swresample \
+         --enable-decoder=aac,alac,pcm_s16be --enable-static --disable-shared --enable-pic \
+    && make -j"$(nproc)" && make install
 RUN t=$(cat /etc/target-triplet) && export PKG_CONFIG_LIBDIR=/usr/lib/$t/pkgconfig:/usr/share/pkgconfig \
     && git clone https://github.com/mikebrady/nqptp.git && cd nqptp && git checkout ${NQPTP_REV} \
     && autoreconf -fi && ./configure --host=$t && make -j"$(nproc)"
 COPY patches /patches
-RUN t=$(cat /etc/target-triplet) && export PKG_CONFIG_LIBDIR=/usr/lib/$t/pkgconfig:/usr/share/pkgconfig \
+RUN t=$(cat /etc/target-triplet) \
+    && export PKG_CONFIG_LIBDIR=/usr/local/lib/pkgconfig:/usr/lib/$t/pkgconfig:/usr/share/pkgconfig \
+    && export PKG_CONFIG="pkg-config --static" \
     && git clone https://github.com/mikebrady/shairport-sync.git && cd shairport-sync && git checkout ${SPS_REV} \
-    && git apply /patches/shairport-sync-libgcrypt.patch \
+    && git apply /patches/shairport-sync-libgcrypt.patch /patches/shairport-sync-no-libavformat.patch \
     && autoreconf -fi \
     && ./configure --host=$t --sysconfdir=/etc --with-airplay-2 --with-avahi --with-ssl=gcrypt \
          --with-soxr --with-stdout --with-metadata --with-metadata-multicast --without-alsa \
@@ -70,7 +89,10 @@ RUN d=/out/share/doc/airplay2cast && s=/out/share/src/airplay2cast && mkdir -p $
          -o $s/nqptp-${NQPTP_REV}.tar.gz HEAD \
     && git -C shairport-sync archive --format=tar.gz --prefix=shairport-sync-${SPS_REV}/ \
          -o $s/shairport-sync-${SPS_REV}.tar.gz HEAD \
-    && cp /patches/*.patch $s/
+    && cp /patches/*.patch $s/ \
+    && cp ffmpeg-${FFMPEG_VERSION}/COPYING.LGPLv2.1 $d/COPYING.LGPLv2.1.ffmpeg \
+    && cp ffmpeg-${FFMPEG_VERSION}.tar.xz $s/ \
+    && grep '^#define FFMPEG_CONFIGURATION' ffmpeg-${FFMPEG_VERSION}/config.h > $s/ffmpeg-configuration.txt
 COPY LICENSE /out/share/doc/airplay2cast/LICENSE
 COPY THIRD_PARTY_NOTICES.md /out/share/doc/airplay2cast/
 
@@ -100,8 +122,7 @@ FROM debian:${DEBIAN}-slim AS base
 FROM --platform=$BUILDPLATFORM debian:${DEBIAN} AS rootfs
 ARG TARGETARCH
 ARG RUNTIME_PACKAGES="dbus avahi-daemon libpopt0 libconfig9 libgnutls30 libsoxr0 \
-      libavahi-client3 libplist3 libsodium23 libgcrypt20 libuuid1 \
-      libavutil57 libavcodec59 libavformat59 libswresample4"
+      libavahi-client3 libplist3 libsodium23 libgcrypt20 libuuid1"
 COPY --from=base /var/lib/dpkg/status /target/status
 COPY --from=base /etc/passwd /etc/group /etc/shadow /etc/gshadow /rootfs/etc/
 COPY --from=base /etc/apt/sources.list.d/ /target/sources.list.d/
