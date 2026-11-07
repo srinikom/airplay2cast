@@ -284,7 +284,13 @@ static void handle_meta(device *d, const uint8_t *pkt, size_t len) {
       LOGI("%s: AirPlay resume", d->tag);
       d->preempted = 0;
     } else if (!strcmp(code, "paus")) {
+      /* Buffered senders (YouTube, Apple Music) pause without a flush. Keeping the media
+       * running would feed the speaker silence while shairport-sync re-sends ~1 s ahead
+       * on resume, so the speaker's backlog grows by that much per pause (18 s seen after
+       * a long session), and the pause itself is heard only after that backlog drains. */
       LOGI("%s: AirPlay pause", d->tag);
+      if (d->cfg->flush_stop)
+        d->flushed = 1;
     } else if (!strcmp(code, "pvol")) {
       double av;
       if (sscanf(data, "%lf", &av) == 1) {

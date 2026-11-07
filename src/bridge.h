@@ -26,7 +26,7 @@ typedef struct {
   int rate;
   int duck_percent;         /* chime suppression: launch at most this volume; 0 = off */
   int hw_volume;            /* AirPlay volume drives the speaker volume instead of PCM gain */
-  int flush_stop;           /* stop Cast media on AirPlay flush (pause/skip) for responsiveness */
+  int flush_stop;           /* stop Cast media on AirPlay pause/flush (pause/skip) for responsiveness */
   char mdns_if[64];         /* IPv4 address of the interface used for discovery */
   int discovery_interval_s;
   int sps_verbosity;

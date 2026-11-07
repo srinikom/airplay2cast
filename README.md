@@ -139,8 +139,10 @@ The avahi client libraries ship in `out/lib`.
 * **Volume:** by default the AirPlay slider scales the PCM in shairport-sync. The
   speaker's own volume is never changed, so set its preferred level with Google Home
   or its buttons. `--hw-volume` maps the slider to the speaker volume instead.
-* **Pause / skip:** an AirPlay flush stops the speaker's media at once, so stale
-  buffered audio is cut. Only audio sent after the flush reloads the stream, without
+* **Pause / skip:** an AirPlay pause or flush stops the speaker's media at once, so
+  stale buffered audio is cut. (Buffered senders such as YouTube pause without a flush;
+  keeping the stream open across those pauses let the speaker's lag grow by about 1 s
+  per pause, to 18 s in a long session.) Only audio sent afterwards reloads the stream, without
   relaunching the app, so there's no second chime. Short gaps are filled with silence
   so the speaker keeps the stream open.
 * **Diagnostics:** the log shows how long each start takes (`speaker playing 0.6 s
