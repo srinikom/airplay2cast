@@ -32,8 +32,9 @@ docker compose logs -f
 
 The image builds on the target itself (amd64 or arm64), or on a faster machine for
 another architecture. All build steps run on the build machine: the programs are
-cross-compiled with Debian's cross toolchain, and the target's runtime packages are
-unpacked onto the official target base image. No QEMU emulation is needed:
+cross-compiled with Debian's cross toolchain, and the image is assembled from only the
+Debian packages the programs need (56, no apt, dpkg or perl), unpacked for the target
+architecture. No QEMU emulation is needed:
 
 ```sh
 make docker-image PLATFORM=linux/arm64        # image for the target (omit PLATFORM: native)
@@ -186,7 +187,7 @@ Binaries and image cross-built on x86-64 (no emulation), tested on the Pine64.
 | tone through Cast: steady PLAYING, ~1.4 s latency, volume restored | pass (x86 + Pine64) | pass |
 | integration test (fake shairport-sync, real Nest Audio) | pass | |
 | idle footprint, 6 receivers; restart time | | 31 MiB RAM, ~2–4% CPU; 1.5 s |
-| image size (arm64), minimal FFmpeg | | 114 MB on disk, 41 MB to transfer (was 261 / 104 MB) |
+| image size (arm64) | | 65 MB on disk, 27 MB to transfer (was 261 / 104 MB) |
 | bridge CPU, wake-ups and memory before/after tuning | see [docs/TUNING.md](docs/TUNING.md) | |
 
 **Not covered by automated tests:**

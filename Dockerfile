@@ -13,7 +13,7 @@
 #   binaries  export target: the programs, license texts and sources (+ tests/test_unit)
 #             docker buildx build --platform linux/arm64 --target binaries --output type=local,dest=out .
 #   rootfs    runtime packages for the target, downloaded and unpacked on the build machine
-#   runtime   final image (default target) used by compose.yaml
+#   runtime   final image (default target) used by compose.yaml: the rootfs alone, FROM scratch
 #
 # Every RUN step executes on the build machine, so no emulation is needed:
 #   docker compose build                                         # native
@@ -113,21 +113,29 @@ COPY --from=deps /out/ /
 COPY --from=bridge /src/airplay2cast /
 COPY --from=bridge /src/tests/test_unit /tests/
 
-# Target base image: used only as a filesystem (no RUN), so it needs no emulation.
+# Target base image: only its account files and apt sources are used (no RUN, so no
+# emulation).
 FROM debian:${DEBIAN}-slim AS base
 
-# Runtime packages for the target architecture, resolved against the base image's
-# installed set, unpacked on the build machine. What their maintainer scripts would
-# do at install time (system users, avahi config) is done here directly.
+# The runtime filesystem, built from nothing on the build machine: the packages the
+# programs and docker/entrypoint.sh need, plus their dependencies, for the target
+# architecture (no apt, dpkg, perl or other parts of a full Debian base). What the
+# maintainer scripts would do at install time (system users, avahi config) is done here
+# directly. Man pages, translations and package docs are left out, except every
+# package's copyright file.
 FROM --platform=$BUILDPLATFORM debian:${DEBIAN} AS rootfs
 ARG TARGETARCH
-ARG RUNTIME_PACKAGES="dbus avahi-daemon libpopt0 libconfig9 libgnutls30 libsoxr0 \
+ARG RUNTIME_PACKAGES="base-files usr-is-merged bash coreutils libc-bin \
+      dbus avahi-daemon libpopt0 libconfig9 libgnutls30 libsoxr0 \
       libavahi-client3 libplist3 libsodium23 libgcrypt20 libuuid1"
-COPY --from=base /var/lib/dpkg/status /target/status
-COPY --from=base /etc/passwd /etc/group /etc/shadow /etc/gshadow /rootfs/etc/
+COPY --from=base /etc/passwd /etc/group /etc/shadow /etc/gshadow /etc/nsswitch.conf /rootfs/etc/
 COPY --from=base /etc/apt/sources.list.d/ /target/sources.list.d/
 RUN set -e; \
     mkdir -p /target/lists/partial /debs/partial; \
+    # adduser is needed only by maintainer scripts, which don't run here (the users are
+    # added below), so it counts as installed; usr-is-merged keeps usrmerge (and perl) out
+    printf '%s\n' 'Package: adduser' 'Status: install ok installed' 'Architecture: all' \
+      'Version: 3.134' > /target/status; \
     printf '%s\n' "APT::Architecture \"$TARGETARCH\";" "APT::Architectures { \"$TARGETARCH\"; };" \
       'Dir::State::status "/target/status";' 'Dir::State::Lists "/target/lists";' \
       'Dir::Etc::SourceParts "/target/sources.list.d";' 'Dir::Cache::archives "/debs";' \
@@ -135,13 +143,18 @@ RUN set -e; \
     export APT_CONFIG=/target/apt.conf; \
     apt-get update -qq; \
     apt-get install -y -qq --download-only $RUNTIME_PACKAGES; \
-    mkdir -p /rootfs/usr/bin /rootfs/usr/sbin /rootfs/usr/lib /rootfs/var/lib/dpkg/info; \
-    for d in bin sbin lib; do ln -s usr/$d /rootfs/$d; done; \
-    cp /target/status /rootfs/var/lib/dpkg/status; \
+    mkdir -p /rootfs/usr/bin /rootfs/usr/sbin /rootfs/usr/lib /rootfs/usr/lib64 \
+      /rootfs/var/lib/dpkg/info; \
+    for d in bin sbin lib lib64; do ln -s usr/$d /rootfs/$d; done; \
+    : > /rootfs/var/lib/dpkg/status; \
     for deb in /debs/*.deb; do \
       pkg=$(dpkg-deb -f "$deb" Package); \
       [ "$(dpkg-deb -f "$deb" Multi-Arch)" = same ] && pkg="$pkg:$TARGETARCH"; \
-      dpkg-deb --fsys-tarfile "$deb" | tar -x --keep-directory-symlink -C /rootfs; \
+      dpkg-deb --fsys-tarfile "$deb" | tar -x --keep-directory-symlink -C /rootfs \
+        --exclude='./usr/share/man/*' --exclude='./usr/share/locale/*' \
+        --exclude='./usr/share/info/*' --exclude='./usr/share/lintian/*' \
+        --exclude='./usr/share/doc/*/changelog*' --exclude='./usr/share/doc/*/NEWS*' \
+        --exclude='./usr/share/doc/*/README*' --exclude='./usr/share/doc/*/examples/*'; \
       dpkg-deb --fsys-tarfile "$deb" | tar -t | sed 's|^\./|/|; s|/$||; s|^$|/.|' \
         > "/rootfs/var/lib/dpkg/info/$pkg.list"; \
       { echo; dpkg-deb -f "$deb" | sed '/^Package:/a Status: install ok installed'; } \
@@ -160,11 +173,13 @@ RUN set -e; \
     chown 101:102 /rootfs/run/avahi-daemon; \
     sed -i 's/^#\?enable-dbus=.*/enable-dbus=yes/; s/^#\?publish-workstation=.*/publish-workstation=no/' \
       /rootfs/etc/avahi/avahi-daemon.conf; \
-    rm /rootfs/bin /rootfs/sbin /rootfs/lib
+    mkdir -p -m 1777 /rootfs/tmp; mkdir -p /rootfs/root /rootfs/var/tmp; chmod 1777 /rootfs/var/tmp; \
+    rm -rf /rootfs/var/run; ln -s /run /rootfs/var/run; \
+    if [ ! -e /rootfs/usr/lib64/ld-linux-x86-64.so.2 ]; then rm /rootfs/lib64; rmdir /rootfs/usr/lib64; fi
 COPY --from=binaries /nqptp /shairport-sync /airplay2cast /rootfs/usr/local/bin/
 COPY --from=binaries /share/ /rootfs/usr/share/
 COPY --chmod=755 docker/entrypoint.sh /rootfs/entrypoint.sh
 
-FROM base AS runtime
+FROM scratch AS runtime
 COPY --from=rootfs /rootfs/ /
 ENTRYPOINT ["/entrypoint.sh"]

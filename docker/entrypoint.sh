@@ -25,7 +25,7 @@ if [ "${AP2C_MODE:-bridge}" = "services" ]; then
   # peers whose uid it can resolve, so register the owner of the mounted directory.
   owner=$(stat -c %u /run/dbus)
   if [ "$owner" != 0 ] && ! getent passwd "$owner" >/dev/null; then
-    useradd -M -u "$owner" -s /usr/sbin/nologin host-user
+    echo "host-user:x:$owner:$owner::/nonexistent:/usr/sbin/nologin" >> /etc/passwd
   fi
 fi
 if bus_ok; then
