@@ -102,9 +102,10 @@ ARG BUILDARCH
 COPY Makefile ./
 COPY src ./src
 COPY tests ./tests
-# unit tests run here for native builds; cross builds export tests/test_unit to run on the target
+# unit tests run here for native builds; cross builds export tests/test_unit to run on the
+# target. UBSan only: gcc-12's ASan can hang on build hosts with high mmap randomization.
 RUN t=$(cat /etc/target-triplet) \
-    && make -j"$(nproc)" CC=$t-gcc airplay2cast tests/test_unit \
+    && make -j"$(nproc)" CC=$t-gcc SANITIZE=undefined airplay2cast tests/test_unit \
     && if [ "$TARGETARCH" = "$BUILDARCH" ]; then ./tests/test_unit; fi \
     && $t-strip airplay2cast
 

@@ -9,6 +9,9 @@ SRCS := src/main.c src/bridge.c src/cast.c src/cast_proto.c src/json.c src/mdns.
 OBJS := $(SRCS:.c=.o)
 LIB_SRCS := $(filter-out src/main.c,$(SRCS))
 TESTS := tests/test_unit
+# Debian 12's gcc-12 AddressSanitizer can hang at start-up on kernels with high mmap
+# randomization (vm.mmap_rnd_bits=32, e.g. Ubuntu's 6.8); Docker builds use SANITIZE=undefined
+SANITIZE ?= address,undefined
 
 all: airplay2cast
 
@@ -19,7 +22,7 @@ src/%.o: src/%.c src/*.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 tests/test_unit: tests/test_unit.c $(LIB_SRCS) src/*.h
-	$(CC) $(CFLAGS) -Isrc -fsanitize=address,undefined -o $@ tests/test_unit.c $(LIB_SRCS) $(LDLIBS)
+	$(CC) $(CFLAGS) -Isrc -fsanitize=$(SANITIZE) -o $@ tests/test_unit.c $(LIB_SRCS) $(LDLIBS)
 
 test: $(TESTS)
 	./tests/test_unit
