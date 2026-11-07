@@ -1,0 +1,15 @@
+variant,seconds_played,rss_kb
+before,2,6272
+after,2,6144
+before,4,6528
+after,4,6016
+before,6,6912
+after,6,6144
+before,8,7424
+after,8,6272
+before,10,7296
+after,10,6144
+before,12,7424
+after,12,6272
+before,14,7424
+after,14,6272

@@ -513,7 +513,9 @@ static void *ctl_thread(void *arg) {
   while (!d->stop) {
     struct pollfd p[2] = {{.fd = d->meta_fd, .events = POLLIN}, {.fd = cast_fd(&d->cc), .events = POLLIN}};
     int np = cast_is_open(&d->cc) ? 2 : 1;
-    poll(p, (nfds_t)np, 100);
+    /* tick often only while a speaker connection or AirPlay session needs timing; an idle
+     * receiver is woken by its metadata socket (play begin precedes audio) */
+    poll(p, (nfds_t)np, np == 2 || d->ap_active ? 100 : 1000);
     if (p[0].revents & POLLIN) {
       ssize_t n;
       while ((n = recv(d->meta_fd, pkt, sizeof(pkt), MSG_DONTWAIT)) > 0)

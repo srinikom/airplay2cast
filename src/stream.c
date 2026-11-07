@@ -19,7 +19,9 @@
 #include "log.h"
 
 #define MAX_STREAMS 64
-#define CHUNK 8192
+#define CHUNK 16384
+#define NOTIFY_MS 40 /* clients are woken once per this much new audio, not per write */
+#define IDLE_WAIT_MS 100 /* client wake-up interval without new audio (silence feed, kicks) */
 #define SILENCE_AFTER_MS 400 /* gap after which silence is inserted to keep the client fed */
 #define SILENCE_SLICE_MS 20
 
@@ -53,6 +55,7 @@ int stream_init(stream *s, const char *id, int rate, int channels, int ring_ms, 
   s->buf = malloc(s->cap);
   if (!s->buf)
     return -1;
+  s->notify_bytes = (size_t)rate * NOTIFY_MS / 1000 * fb;
   s->max_backlog_ms = backlog_ms < ring_ms - 500 ? backlog_ms : ring_ms - 500;
   pthread_mutex_init(&s->mu, NULL);
   pthread_condattr_t ca;
@@ -97,7 +100,12 @@ void stream_write(stream *s, const uint8_t *data, size_t len) {
     len -= n;
   }
   s->last_write_ms = now_ms();
-  pthread_cond_broadcast(&s->cv);
+  /* batch: waking every client per small write costs a context switch and a tiny TCP
+   * segment each; the receiver buffers over a second, so 40 ms granularity is free */
+  if (s->wpos - s->notified_pos >= s->notify_bytes) {
+    s->notified_pos = s->wpos;
+    pthread_cond_broadcast(&s->cv);
+  }
   pthread_mutex_unlock(&s->mu);
 }
 
@@ -300,7 +308,7 @@ static void serve_stream(int fd, stream *s, const char *peer, int head_only) {
     }
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    ts.tv_nsec += 10 * 1000000;
+    ts.tv_nsec += IDLE_WAIT_MS * 1000000L;
     if (ts.tv_nsec >= 1000000000) {
       ts.tv_sec++;
       ts.tv_nsec -= 1000000000;

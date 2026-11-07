@@ -194,6 +194,13 @@ static void test_stream(void) {
   stream_mark_session_next(&s);
   stream_write(&s, pcm, sizeof(pcm));
   CHECK(stream_start_pos(&s) == s.wpos - 4000);
+  /* clients are woken per 40 ms (7680 bytes) of new audio, not per write */
+  s.notified_pos = s.wpos;
+  uint64_t woke = s.wpos;
+  stream_write(&s, pcm, sizeof(pcm));
+  CHECK(s.notified_pos == woke);
+  stream_write(&s, pcm, sizeof(pcm));
+  CHECK(s.notified_pos == s.wpos);
   stream_destroy(&s);
 
   uint8_t h[44];

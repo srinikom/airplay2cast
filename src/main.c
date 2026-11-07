@@ -47,6 +47,7 @@ static void usage(FILE *f) {
           "  -S, --suffix TEXT        appended to AirPlay names (default: none)\n"
           "  -t, --idle-timeout S     release the speaker after S seconds without audio (default 30)\n"
           "  -l, --backlog MS         audio a newly connected speaker starts with (default 1000)\n"
+          "  -r, --rate HZ            output sample rate, 44100 (AirPlay's own) or 48000 (default 44100)\n"
           "  -D, --duck PERCENT       launch-chime volume cap, 0 disables (default 5)\n"
           "  -H, --hw-volume          AirPlay volume sets the speaker volume (default: software gain)\n"
           "  -F, --no-flush-stop      keep speaker media running across AirPlay pause/skip\n"
@@ -228,9 +229,9 @@ int main(int argc, char **argv) {
       .base_port = 7000,
       .include_groups = 1,
       .idle_timeout_s = 30,
-      .ring_ms = 10000,
+      .ring_ms = 4000,
       .backlog_ms = 1000,
-      .rate = 48000,
+      .rate = 44100,
       .duck_percent = 5,
       .flush_stop = 1,
       .discovery_interval_s = 30,
@@ -259,11 +260,11 @@ int main(int argc, char **argv) {
       {"backlog", required_argument, 0, 'l'},   {"duck", required_argument, 0, 'D'},
       {"hw-volume", no_argument, 0, 'H'},       {"no-flush-stop", no_argument, 0, 'F'},
       {"mdns-if", required_argument, 0, 'm'},   {"scan-interval", required_argument, 0, 'I'},
-      {"seconds", required_argument, 0, OPT_SECONDS},
+      {"rate", required_argument, 0, 'r'},      {"seconds", required_argument, 0, OPT_SECONDS},
       {"verbose", no_argument, 0, 'v'},         {"version", no_argument, 0, 'V'},
       {"help", no_argument, 0, 'h'},            {0, 0, 0, 0}};
   int seconds = 10, c;
-  while ((c = getopt_long(argc, argv, "s:d:p:a:b:i:x:GS:t:l:D:HFm:I:vVh", opts, NULL)) != -1) {
+  while ((c = getopt_long(argc, argv, "s:d:p:a:b:i:x:GS:t:l:r:D:HFm:I:vVh", opts, NULL)) != -1) {
     switch (c) {
     case 's': snprintf(cfg.sps_bin, sizeof(cfg.sps_bin), "%s", optarg); break;
     case 'd': snprintf(cfg.state_dir, sizeof(cfg.state_dir), "%s", optarg); break;
@@ -276,6 +277,7 @@ int main(int argc, char **argv) {
     case 'S': snprintf(cfg.suffix, sizeof(cfg.suffix), "%s", optarg); break;
     case 't': cfg.idle_timeout_s = atoi(optarg); break;
     case 'l': cfg.backlog_ms = atoi(optarg); break;
+    case 'r': cfg.rate = atoi(optarg); break;
     case 'D': cfg.duck_percent = atoi(optarg); break;
     case 'H': cfg.hw_volume = 1; break;
     case 'F': cfg.flush_stop = 0; break;
@@ -293,7 +295,8 @@ int main(int argc, char **argv) {
     }
   }
   if (cfg.duck_percent < 0 || cfg.duck_percent > 100 || cfg.idle_timeout_s < 1 ||
-      cfg.backlog_ms < 0 || cfg.discovery_interval_s < 5 || cfg.http_port < 0 ||
+      cfg.backlog_ms < 0 || (cfg.rate != 44100 && cfg.rate != 48000) ||
+      cfg.discovery_interval_s < 5 || cfg.http_port < 0 ||
       cfg.http_port > 65535 || cfg.base_port < 1 || cfg.base_port > 65000) {
     fprintf(stderr, "invalid option value\n");
     return 2;

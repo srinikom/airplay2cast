@@ -114,6 +114,7 @@ The avahi client libraries ship in `out/lib`.
 | `-S, --suffix TEXT` | none | appended to AirPlay names |
 | `-t, --idle-timeout S` | 30 | release the speaker after S seconds without audio |
 | `-l, --backlog MS` | 1000 | audio a speaker starts with (sets latency, see below) |
+| `-r, --rate HZ` | 44100 | output sample rate: 44100 (what AirPlay senders use, so shairport-sync doesn't resample) or 48000 |
 | `-D, --duck PERCENT` | 5 | volume cap while the Cast app launches (0 = off) |
 | `-H, --hw-volume` | off | AirPlay slider sets speaker volume instead of software gain |
 | `-F, --no-flush-stop` | off | keep speaker media running across AirPlay pause/skip |
@@ -127,8 +128,8 @@ The avahi client libraries ship in `out/lib`.
   launches the Default Media Receiver (only if it isn't already running), so its
   launch chime plays while the sender is still starting up. Once 0.8 s of audio has
   arrived it LOADs `http://<bridge>:8089/stream/<cast-id>.wav`. Starting from that
-  cushion, the speaker plays about 0.4 s after the LOAD; with less, Cast receivers
-  tend to start and then underrun.
+  cushion, the speaker plays about 0.6 s after the LOAD (0.4 s with `--rate 48000`);
+  with less, Cast receivers tend to start and then underrun.
 * **Launch chime:** Cast speakers play a connection sound when a receiver app
   launches. The bridge lowers the speaker to at most 5% before LAUNCH and restores the
   previous volume once playback runs (at least 2.5 s after launch). It never raises a
@@ -141,7 +142,7 @@ The avahi client libraries ship in `out/lib`.
   buffered audio is cut. Only audio sent after the flush reloads the stream, without
   relaunching the app, so there's no second chime. Short gaps are filled with silence
   so the speaker keeps the stream open.
-* **Diagnostics:** the log shows how long each start takes (`speaker playing 0.4 s
+* **Diagnostics:** the log shows how long each start takes (`speaker playing 0.6 s
   after load`) and warns about slow starts and underruns.
 * **Release:** after `--idle-timeout` seconds without audio the bridge stops its app
   and disconnects, so the speaker is free for other use.
@@ -185,6 +186,7 @@ Binaries and image cross-built on x86-64 (no emulation), tested on the Pine64.
 | tone through Cast: steady PLAYING, ~1.4 s latency, volume restored | pass (x86 + Pine64) | pass |
 | integration test (fake shairport-sync, real Nest Audio) | pass | |
 | idle footprint, 6 receivers; restart time | | 31 MiB RAM, ~2–4% CPU; 1.5 s |
+| bridge CPU, wake-ups and memory before/after tuning | see [docs/TUNING.md](docs/TUNING.md) | |
 
 **Not covered by automated tests:**
 

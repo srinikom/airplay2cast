@@ -1,0 +1,11 @@
+variant,run,cpu_pct,wakeups_per_s
+before,1,0.20,67.4
+before,2,0.20,66.9
+before,3,0.10,67.0
+before,4,0.20,67.1
+before,5,0.20,67.1
+before,6,0.10,67.1
+before,7,0.20,67.0
+before,8,0.20,67.5
+before,9,0.70,129.2
+before,10,1.20,251.9

@@ -22,6 +22,8 @@ typedef struct stream {
   uint64_t wpos;         /* total bytes ever written */
   uint64_t session_pos;  /* wpos when the current play session began */
   int64_t last_write_ms;
+  uint64_t notified_pos; /* wpos when clients were last woken */
+  size_t notify_bytes;
   unsigned generation;   /* bumping it disconnects current HTTP clients */
   int clients;
   int max_backlog_ms;    /* how far back a new client starts */
