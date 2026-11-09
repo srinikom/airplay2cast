@@ -43,8 +43,10 @@ make docker-deploy DEPLOY_HOST=user@pine64    # docker load + compose up on the 
 make docker-test DEPLOY_HOST=user@pine64 TEST_SPEAKER="Hallway speaker"
 ```
 
-`docker-deploy` copies the image and `compose.yaml` to `DEPLOY_HOST:DEPLOY_DIR` (default
-`~/airplay2cast`) and recreates the service; nothing is built on the target.
+`docker-deploy` copies the local image (it doesn't build it: run `docker-image` and
+`docker-binaries` first) and `compose.yaml` to `DEPLOY_HOST:DEPLOY_DIR` (default
+`~/airplay2cast`), replacing any edits made there, and recreates the service; nothing
+is built on the target.
 `docker-test` runs the unit tests from `out/` on the target, checks that the deployed
 service started its receivers, and, with `TEST_SPEAKER`, runs the integration test
 against that Cast device. Native image builds also run the unit tests during the
@@ -62,6 +64,10 @@ AP2C_INCLUDE="Hallway speaker,Office speaker" docker compose up -d
 ```yaml
     command: ["--suffix", " (AirPlay)", "--no-groups", "--idle-timeout", "60"]
 ```
+
+The shipped `compose.yaml` adds the suffix ` (AirPlay)` to every receiver name. Cast
+speakers with Bluetooth otherwise appear twice under the same name on a Mac paired to
+them, and macOS may switch to the Bluetooth one, so AirPlay never reaches the bridge.
 
 ## Native binary
 

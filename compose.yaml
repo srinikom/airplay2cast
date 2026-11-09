@@ -16,7 +16,10 @@ services:
       AP2C_INCLUDE: ${AP2C_INCLUDE:-}
       AP2C_EXCLUDE: ${AP2C_EXCLUDE:-}
     # extra airplay2cast options, for example:
-    # command: ["--suffix", " (AirPlay)", "--no-groups", "--idle-timeout", "60"]
+    #   ["--suffix", " (AirPlay)", "--no-groups", "--idle-timeout", "60"]
+    # The suffix keeps the AirPlay names apart from the speakers' own Bluetooth names:
+    # a Mac paired over Bluetooth lists both as "Office speaker" and may pick Bluetooth.
+    command: ["--suffix", " (AirPlay)"]
     tmpfs:
       - /tmp
     volumes:
