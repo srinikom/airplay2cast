@@ -30,9 +30,11 @@ typedef struct cast_conn {
   double volume;
   int muted;
   char app_id[32];
+  int idle_screen;        /* app_id is the speaker's idle/backdrop screen */
   char transport_id[64];
   char session_id[64];
   int app_connected; /* virtual connection to transport_id opened */
+  int closed_by_receiver; /* our app connection was closed by the speaker; cleared by caller */
 
   /* media state (from MEDIA_STATUS) */
   long media_session_id;

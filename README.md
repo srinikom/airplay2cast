@@ -149,8 +149,10 @@ The avahi client libraries ship in `out/lib`.
   after load`) and warns about slow starts and underruns.
 * **Release:** after `--idle-timeout` seconds without audio the bridge stops its app
   and disconnects, so the speaker is free for other use.
-* **Someone else casts:** if another app or sender takes over the speaker, the bridge
-  doesn't fight it. It reclaims the speaker only for a new AirPlay session.
+* **Someone else casts:** if another app, sender or the speaker's Bluetooth input takes
+  over the speaker, also while AirPlay is paused, the bridge doesn't fight it and puts
+  back the volume it lowered for the launch chime. It reclaims the speaker only when
+  AirPlay starts or resumes again.
 * **Discovery:** new speakers appear within `--scan-interval`. A speaker disappears
   after four missed scans, and never while it is playing. IP changes are followed.
 

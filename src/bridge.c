@@ -28,6 +28,7 @@
 /* Audio a new session collects before LOAD. Cast receivers start playing once they
  * hold about 1.2 s; fed from only ~0.2 s they tend to underrun right after starting. */
 #define LOAD_CUSHION_MS 800
+#define TAKEOVER_SETTLE_MS 1500 /* wait after our app is closed before relaunching it */
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -433,6 +434,28 @@ static void tick(device *d) {
 
   if (!has_audio && last && t - last > 5000)
     d->preempted = 0; /* a later session may take the speaker again */
+
+  if (d->cc.closed_by_receiver) {
+    /* another input (Bluetooth, another app) may be replacing ours; give the speaker a
+     * moment to report what runs now before audio would relaunch our app */
+    d->cc.closed_by_receiver = 0;
+    d->media_loaded = 0;
+    if (d->next_retry_ms < t + TAKEOVER_SETTLE_MS)
+      d->next_retry_ms = t + TAKEOVER_SETTLE_MS;
+  }
+  /* Our app was replaced, also between loads (pause and play end stop our media): don't
+   * fight the speaker's new input for the rest of this AirPlay session. Seen with a Mac
+   * paired to the speaker over Bluetooth: the bridge relaunched over Bluetooth Audio,
+   * which then took over again, with the launch-chime volume duck applied in between. */
+  if (d->ours && cast_is_open(&d->cc) && d->cc.app_id[0] && !d->cc.idle_screen &&
+      strcmp(d->cc.app_id, CAST_APP_DEFAULT_MEDIA_RECEIVER)) {
+    LOGI("%s: speaker taken over by app %s; not reclaiming during this session", d->tag,
+         d->cc.app_id);
+    restore_duck(d, 0);
+    d->preempted = 1;
+    d->ours = 0;
+    d->media_loaded = 0;
+  }
 
   /* track what the receiver is doing */
   if (d->media_loaded) {

@@ -65,7 +65,7 @@ static void teardown(cast_conn *c) {
   c->fd = -1;
   c->rlen = 0;
   c->app_id[0] = c->transport_id[0] = c->session_id[0] = 0;
-  c->app_connected = 0;
+  c->app_connected = c->closed_by_receiver = c->idle_screen = 0;
   c->media_session_id = 0;
   c->player_state[0] = 0;
 }
@@ -145,6 +145,7 @@ static void handle_receiver_status(cast_conn *c, jval *st) {
   }
   snprintf(c->transport_id, sizeof(c->transport_id), "%s", tid ? tid : "");
   snprintf(c->app_id, sizeof(c->app_id), "%s", aid ? aid : "");
+  c->idle_screen = app ? json_bool(app, "isIdleScreen", 0) : 0;
   snprintf(c->session_id, sizeof(c->session_id), "%s", sid ? sid : "");
 }
 
@@ -191,6 +192,7 @@ static void handle_message(cast_conn *c, cast_msg *m) {
   if (!strcmp(m->ns, NS_CONNECTION) && !strcmp(type, "CLOSE")) {
     if (!strcmp(m->source, c->transport_id)) {
       LOGI("%s: receiver application closed our connection", c->tag);
+      c->closed_by_receiver = 1;
       c->app_connected = 0;
       c->media_session_id = 0;
       c->player_state[0] = 0;
